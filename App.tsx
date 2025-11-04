@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
 import Header from './components/Header';
 import ImageUploader from './components/ImageUploader';
@@ -50,7 +50,7 @@ const getImageUrlFromResponse = (response: GenerateContentResponse): string | nu
 type Step = 'CREATE_MONUMENT' | 'PLACE_IN_SCENE' | 'SHARE';
 
 const App: React.FC = () => {
-    const [apiKey] = useState<string | undefined>(process.env.API_KEY);
+    const [apiKey, setApiKey] = useState<string>('');
     const [step, setStep] = useState<Step>('CREATE_MONUMENT');
     const [monumentSource, setMonumentSource] = useState<'prompt' | 'upload'>('prompt');
     const [monumentPrompt, setMonumentPrompt] = useState<string>('A majestic crystal obelisk monument, futuristic, glowing');
@@ -69,12 +69,7 @@ const App: React.FC = () => {
     const [isLinkCopied, setIsLinkCopied] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
 
-     useEffect(() => {
-        if (!apiKey) {
-            setError("API key is not configured. Please set it up in your deployment environment.");
-        }
-    }, [apiKey]);
-
+    const isApiKeyMissing = !apiKey;
 
     const changeMonumentSource = (source: 'prompt' | 'upload') => {
         setGeneratedMonument(null); // Reset on tab switch
@@ -101,7 +96,7 @@ const App: React.FC = () => {
 
     const handleGenerateMonument = useCallback(async () => {
         if (!apiKey) {
-             setError("API key is not configured.");
+             setError("API key is not configured. Please enter it above.");
              return;
         }
         if (!monumentPrompt) {
@@ -146,7 +141,7 @@ Key requirements:
 
     const handleGenerateMonumentFromImage = useCallback(async () => {
         if (!apiKey) {
-             setError("API key is not configured.");
+             setError("API key is not configured. Please enter it above.");
              return;
         }
         if (!monumentFile) {
@@ -205,7 +200,7 @@ Instructions:
     const handleSceneUpload = async (file: File) => {
         setSceneFile(file);
          if (!apiKey) {
-             setError("API key is not configured.");
+             setError("API key is not configured. Please enter it above.");
              return;
         }
         setIsGeneratingPrompt(true);
@@ -234,7 +229,7 @@ Instructions:
 
     const handlePlaceMonument = useCallback(async () => {
         if (!apiKey) {
-             setError("API key is not configured.");
+             setError("API key is not configured. Please enter it above.");
              return;
         }
         if (!generatedMonument) {
@@ -337,12 +332,10 @@ Instructions:
         setScenePrompt('A beautiful sunny park with green grass and trees, photorealistic.');
         setEditPrompt('Add the monument to the center of the park, making it look natural');
         setFinalImage(null);
-        setError(apiKey ? null : "API key is not configured. Please set it up in your deployment environment.");
+        setError(null);
     };
 
     const renderStep = () => {
-        const isApiKeyMissing = !apiKey;
-
         switch (step) {
             case 'CREATE_MONUMENT':
                 return (
@@ -571,7 +564,7 @@ Instructions:
                                     <span>Facebook</span>
                                 </a>
                                  <a href={`https://www.reddit.com/submit?url=${encodeURIComponent(appUrl)}&title=${encodeURIComponent("My AI Creation from Monument Mixer")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
-                                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M22.5,11.85a1.2,1.2,0,0,0-1.12-1,1.17,1.17,0,0,0-.3.05,6.3,6.3,0,0,0-5-3.21,1.19,1.19,0,0,0-1,.08,1.2,1.2,0,0,0-.73,1.06v.2a12.89,12.89,0,0,0-4.64,0v-.2a1.2,1.2,0,0,0-.73-1.06,1.18,1.18,0,0,0-1-.08,6.3,6.3,0,0,0-5,3.21,1.19,1.19,0,0,0-.3-.05,1.2,1.2,0,0,0-1.12,1,1.18,1.18,0,0,0,.6,1,10.19,10.19,0,0,0,0,4.68,1.18,1.18,0,0,0-.6,1,1.2,1.2,0,0,0,1.12,1,1.17,1.17,0,0,0,.3-.05,6.3,6.3,0,0,0,5,3.21,1.19,1.19,0,0,0,1-.08,1.2,1.2,0,0,0,.73-1.06v-.2a12.89,12.89,0,0,0,4.64,0v.2a1.2,1.2,0,0,0,.73,1.06,1.18,1.18,0,0,0,1,.08,6.3,6.3,0,0,0,5-3.21,1.19,1.19,0,0,0,.3.05,1.2,1.2,0,0,0,1.12-1,1.18,1.18,0,0,0-.6-1,10.19,10.19,0,0,0,0-4.68A1.18,1.18,0,0,0,22.5,11.85ZM8.73,15.1a1.68,1.68,0,0,1-2.13,0,1.19,1.19,0,0,1,0-1.72,1.68,1.68,0,0,1,2.13,0,1.19,1.19,0,0,1,0,1.72Zm6.53,0a1.68,1.68,0,0,1-2.13,0,1.19,1.19,0,0,1,0-1.72,1.68,1.68,0,0,1,2.13,0,1.19,1.19,0,0,1,0,1.72ZM17,9.11a3,3,0,0,1-4.83,1.08,1.2,1.2,0,0,1-1.33,0A3,3,0,0,1,7,9.11a1.2,1.2,0,0,1,2.06-.71,1.22,1.22,0,0,1,.29.89,1.53,1.53,0,0,0,3.06,0,1.22,1.22,0,0,1,.29-.89A1.2,1.2,0,0,1,17,9.11Z"/></svg>
+                                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M22.5,11.85a1.2,1.2,0,0,0-1.12-1,1.17,1.17,0,0,0-.3.05,6.3,6.3,0,0,0-5-3.21,1.19,1.19,0,0,0-1,.08,1.2,1.2,0,0,0-.73,1.06v.2a12.89,12.89,0,0,0-4.64,0v-.2a1.2,1.2,0,0,0-.73-1.06,1.18,1.18,0,0,0-1-.08,6.3,6.3,0,0,0-5,3.21,1.19,1.19,0,0,0-.3-.05,1.2,1.2,0,0,0-1.12,1,1.18,1.18,0,0,0,.6,1,10.19,10.19,0,0,0,0,4.68,1.18,1.18,0,0,0-.6,1,1.2,1.2,0,0,0,1.12,1,1.17,1.17,0,0,0,.3-.05,6.3,6.3,0,0,0,5,3.21,1.19,1.19,0,0,0,1-.08,1.2,1.2,0,0,0,.73-1.06v-.2a12.89,12.89,0,0,0,4.64,0v.2a1.2,1.2,0,0,0,.73,1.06,1.18,1.18,0,0,0,1,.08,6.3,6.3,0,0,0,5-3.21,1.19,1.19,0,0,0,.3.05,1.2,1.2,0,0,0,1.12-1,1.18,1.18,0,0,0-.6-1,10.19,10.19,0,0,0,0-4.68A1.18,1.18,0,0,0,22.5,11.85ZM8.73,15.1a1.68,1.68,0,0,1-2.13,0,1.19,1.19,0,0,1,0-1.72,1.68,1.68,0,0,1,2.13,0,1.19,1.19,0,0,1,0,1.72Zm6.53,0a1.68,1.68,0,0,1-2.13,0,1.19,1.19,0,0,1,0-1.72,1.68,1.68,0,0,1,2.13,0,1.19,1.19,0,0,1,0,1.72Zm17,9.11a3,3,0,0,1-4.83,1.08,1.2,1.2,0,0,1-1.33,0A3,3,0,0,1,7,9.11a1.2,1.2,0,0,1,2.06-.71,1.22,1.22,0,0,1,.29.89,1.53,1.53,0,0,0,3.06,0,1.22,1.22,0,0,1,.29-.89A1.2,1.2,0,0,1,17,9.11Z"/></svg>
                                     <span>Reddit</span>
                                 </a>
                                 <button onClick={handleInstagramShare} className="inline-flex items-center gap-2 bg-pink-600 hover:bg-pink-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
@@ -606,8 +599,34 @@ Instructions:
             <main className="flex-grow container mx-auto p-4 sm:p-8 flex items-center justify-center">
                 <div className="w-full max-w-2xl bg-slate-800/50 rounded-2xl shadow-2xl shadow-cyan-500/10 p-6 sm:p-8 border border-slate-700">
                     {isLoading && <Loader message={loadingMessage} />}
+                    
+                    <div className="space-y-4 mb-6">
+                         <label htmlFor="api-key-input" className="block text-sm font-medium text-slate-400">
+                           Google AI API Key
+                        </label>
+                        <input
+                            id="api-key-input"
+                            type="password"
+                            value={apiKey}
+                            onChange={(e) => {
+                                setApiKey(e.target.value);
+                                setError(null); // Clear errors when user types
+                            }}
+                            placeholder="Enter your API key here"
+                            className="w-full bg-slate-900 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
+                        />
+                         {isApiKeyMissing && !error && (
+                            <p className="text-xs text-slate-500">
+                                Your API key is stored only in your browser and is required to use the app.
+                            </p>
+                        )}
+                    </div>
+                    
                     {error && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mb-4">{error}</div>}
-                    {renderStep()}
+
+                    <div className="border-t border-slate-700 pt-6">
+                        {renderStep()}
+                    </div>
                 </div>
             </main>
         </div>
