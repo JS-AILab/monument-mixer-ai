@@ -1,0 +1,5 @@
+{
+  "name": "Monument Mixer AI",
+  "description": "Create a monument using AI, place it in any scene, and share your creation. An image editing app powered by Gemini.",
+  "requestFramePermissions": []
+}
