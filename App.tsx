@@ -7,14 +7,13 @@ import Loader from './components/Loader';
 import CommentSection from './components/CommentSection';
 
 // Add types for window.aistudio
-// FIX: Defined a named interface `AIStudio` to resolve the TypeScript error with subsequent property declarations on the global Window object.
-interface AIStudio {
-    hasSelectedApiKey: () => Promise<boolean>;
-    openSelectKey: () => Promise<void>;
-}
+// FIX: Refactored the global type declaration for `window.aistudio` to use an anonymous inline type to resolve a TypeScript error.
 declare global {
     interface Window {
-        aistudio?: AIStudio;
+        aistudio?: {
+            hasSelectedApiKey: () => Promise<boolean>;
+            openSelectKey: () => Promise<void>;
+        };
     }
 }
 
@@ -64,6 +63,7 @@ const getImageUrlFromResponse = (response: GenerateContentResponse): string | nu
 type Step = 'CREATE_MONUMENT' | 'PLACE_IN_SCENE' | 'SHARE';
 
 const App: React.FC = () => {
+    const [isCheckingApiKey, setIsCheckingApiKey] = useState<boolean>(true);
     const [hasApiKey, setHasApiKey] = useState<boolean>(false);
     const [step, setStep] = useState<Step>('CREATE_MONUMENT');
     const [monumentSource, setMonumentSource] = useState<'prompt' | 'upload'>('prompt');
@@ -84,7 +84,8 @@ const App: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        const checkApiKey = async () => {
+        // Wrap the check in a timeout to give the aistudio object a moment to initialize.
+        const timer = setTimeout(async () => {
             try {
                 if (window.aistudio) {
                     const hasKey = await window.aistudio.hasSelectedApiKey();
@@ -93,9 +94,12 @@ const App: React.FC = () => {
             } catch (e) {
                 console.error("Error checking for API key:", e);
                 setError("Could not verify API key status.");
+            } finally {
+                setIsCheckingApiKey(false);
             }
-        };
-        checkApiKey();
+        }, 300);
+
+        return () => clearTimeout(timer); // Cleanup timeout on unmount
     }, []);
 
     const handleSelectKey = async () => {
@@ -635,6 +639,23 @@ Instructions:
                 );
         }
     };
+    
+    if (isCheckingApiKey) {
+        return (
+            <div className="min-h-screen bg-slate-900 text-white font-sans flex flex-col">
+                <Header />
+                <main className="flex-grow container mx-auto p-4 sm:p-8 flex items-center justify-center">
+                    <div className="text-center space-y-4">
+                        <svg className="animate-spin mx-auto h-12 w-12 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <p className="text-lg text-slate-300 font-semibold">Verifying API key...</p>
+                    </div>
+                </main>
+            </div>
+        );
+    }
     
     if (!hasApiKey) {
         return (
