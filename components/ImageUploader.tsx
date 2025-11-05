@@ -1,77 +1,64 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useRef, useCallback } from 'react';
+import { UploadIcon, XCircleIcon } from './icons';
 
 interface ImageUploaderProps {
-    onImageUpload: (file: File) => void;
-    label: string;
-    id: string;
+  onImageSelect: (file: File | null) => void;
+  imagePreviewUrl: string | null;
 }
 
-const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageUpload, label, id }) => {
-    const [preview, setPreview] = useState<string | null>(null);
-    const fileInputRef = useRef<HTMLInputElement>(null);
+export const ImageUploader: React.FC<ImageUploaderProps> = ({ onImageSelect, imagePreviewUrl }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-        const file = event.target.files?.[0];
-        if (file) {
-            onImageUpload(file);
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                setPreview(reader.result as string);
-            };
-            reader.readAsDataURL(file);
-        }
-    };
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    onImageSelect(file || null);
+  };
 
-    const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-        const file = event.dataTransfer.files?.[0];
-        if (file && file.type.startsWith('image/')) {
-            onImageUpload(file);
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                setPreview(reader.result as string);
-            };
-            reader.readAsDataURL(file);
-        }
-    };
+  const handleRemoveImage = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onImageSelect(null);
+    if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+    }
+  };
 
-    const handleDragOver = (event: React.DragEvent<HTMLDivElement>) => {
-        event.preventDefault();
-        event.stopPropagation();
-    };
-    
-    const triggerFileSelect = () => {
-        fileInputRef.current?.click();
-    };
+  const handleContainerClick = () => {
+    fileInputRef.current?.click();
+  };
 
-    return (
-        <div 
-            className="w-full p-4 border-2 border-dashed border-slate-600 rounded-lg text-center cursor-pointer hover:border-cyan-400 transition-colors duration-300 bg-slate-800/50"
-            onClick={triggerFileSelect}
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-        >
-            <input
-                type="file"
-                id={id}
-                ref={fileInputRef}
-                className="hidden"
-                accept="image/*"
-                onChange={handleFileChange}
-            />
-            {preview ? (
-                <img src={preview} alt="Preview" className="mx-auto max-h-64 rounded-md object-contain" />
-            ) : (
-                <div className="flex flex-col items-center justify-center py-8">
-                    <svg className="w-12 h-12 text-slate-500 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-                    <p className="text-slate-400">{label}</p>
-                    <p className="text-xs text-slate-500">Drag & drop or click to upload</p>
-                </div>
-            )}
-        </div>
-    );
+  return (
+    <div>
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        className="hidden"
+        accept="image/png, image/jpeg, image/webp"
+      />
+      <div
+        onClick={handleContainerClick}
+        className="w-full h-48 border-2 border-dashed border-gray-600 rounded-lg flex items-center justify-center cursor-pointer hover:border-purple-500 hover:bg-gray-800/50 transition-colors relative"
+      >
+        {imagePreviewUrl ? (
+          <>
+            <img src={imagePreviewUrl} alt="Preview" className="w-full h-full object-cover rounded-lg" />
+            <button
+              onClick={handleRemoveImage}
+              className="absolute top-2 right-2 bg-gray-900/70 rounded-full text-gray-300 hover:text-white transition-colors"
+              aria-label="Remove image"
+            >
+              <XCircleIcon className="w-6 h-6" />
+            </button>
+          </>
+        ) : (
+          <div className="text-center text-gray-500">
+            <UploadIcon className="mx-auto h-8 w-8" />
+            <p className="mt-2 text-sm">Click to upload or drag & drop</p>
+            <p className="text-xs">PNG, JPG, WEBP</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
-
-export default ImageUploader;

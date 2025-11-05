@@ -1,5 +1,5 @@
 {
-  "name": "Monument Mixer AI",
-  "description": "Create a monument using AI, place it in any scene, and share your creation. An image editing app powered by Gemini.",
+  "name": "AI Monument Generator",
+  "description": "Create stunning images of monuments from text prompts or by uploading a reference image. This app uses Gemini to bring your architectural visions to life.",
   "requestFramePermissions": []
 }

@@ -1,7 +1,10 @@
 
-export interface Comment {
-  id: number;
-  author: string;
-  text: string;
-  timestamp: string;
+export interface ImageFile {
+  file: File;
+  previewUrl: string;
+}
+
+export interface ImagePayload {
+  base64: string;
+  mimeType: string;
 }
