@@ -6,19 +6,6 @@ import ImageUploader from './components/ImageUploader';
 import Loader from './components/Loader';
 import CommentSection from './components/CommentSection';
 
-// FIX: Define a named interface `AIStudio` to resolve the type conflict.
-// Add types for window.aistudio
-interface AIStudio {
-    hasSelectedApiKey: () => Promise<boolean>;
-    openSelectKey: () => Promise<void>;
-}
-declare global {
-    interface Window {
-        aistudio?: AIStudio;
-    }
-}
-
-
 // Helper to convert File to a format suitable for the Gemini API
 const fileToGenerativePart = async (file: File) => {
   const base64EncodedDataPromise = new Promise<string>((resolve) => {
@@ -64,8 +51,6 @@ const getImageUrlFromResponse = (response: GenerateContentResponse): string | nu
 type Step = 'CREATE_MONUMENT' | 'PLACE_IN_SCENE' | 'SHARE';
 
 const App: React.FC = () => {
-    const [isCheckingApiKey, setIsCheckingApiKey] = useState<boolean>(true);
-    const [hasApiKey, setHasApiKey] = useState<boolean>(false);
     const [step, setStep] = useState<Step>('CREATE_MONUMENT');
     const [monumentSource, setMonumentSource] = useState<'prompt' | 'upload'>('prompt');
     const [monumentPrompt, setMonumentPrompt] = useState<string>('A majestic crystal obelisk monument, futuristic, glowing');
@@ -84,62 +69,13 @@ const App: React.FC = () => {
     const [isLinkCopied, setIsLinkCopied] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
 
-    useEffect(() => {
-        let attempts = 0;
-        const checkInterval = setInterval(async () => {
-            attempts++;
-            if (typeof window.aistudio?.hasSelectedApiKey === 'function') {
-                clearInterval(checkInterval);
-                try {
-                    const hasKey = await window.aistudio.hasSelectedApiKey();
-                    setHasApiKey(hasKey);
-                } catch (e) {
-                    console.error("Error checking for API key:", e);
-                    setError("Could not verify API key status.");
-                } finally {
-                    setIsCheckingApiKey(false);
-                }
-            } else if (attempts > 10) { // Give it ~2 seconds
-                clearInterval(checkInterval);
-                console.warn("aistudio API not found.");
-                setIsCheckingApiKey(false); // Stop loading and show the button
-            }
-        }, 200);
-
-        return () => clearInterval(checkInterval);
-    }, []);
-
-    const handleSelectKey = async () => {
-        setError(null);
-        try {
-            if (window.aistudio) {
-                await window.aistudio.openSelectKey();
-                // Re-verify after the dialog is closed. This is not optimistic.
-                const hasKey = await window.aistudio.hasSelectedApiKey();
-                setHasApiKey(hasKey);
-                 if (!hasKey) {
-                    // This case can happen if the user closes the dialog without selecting a key
-                    console.warn("User closed the select key dialog without choosing a key.");
-                 }
-            } else {
-                 setError("API key selection feature is not available.");
-            }
-        } catch (e) {
-            console.error("Error opening select key dialog:", e);
-            setError("Could not open the API key selection dialog.");
-        }
-    };
-    
     const handleError = (err: unknown) => {
         const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
         if (errorMessage.includes("API key not valid") || errorMessage.includes("Requested entity was not found")) {
-            setError("Your API key appears to be invalid. Please select a new one.");
-            setHasApiKey(false);
+            setError("Your API key appears to be invalid or missing. Please ensure it's configured correctly in your environment.");
         } else if (errorMessage.includes("quota")){
-            setError("You've exceeded your API quota. Please check your billing details or try a different key.");
-            setHasApiKey(false);
-        }
-        else {
+            setError("You've exceeded your API quota. Please check your billing details or use a different key.");
+        } else {
             setError(errorMessage);
         }
         console.error(err);
@@ -279,15 +215,9 @@ Instructions:
             setEditPrompt(`Add the monument to ${description}, making it look natural`);
 
         } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-            if (errorMessage.includes("API key not valid") || errorMessage.includes("Requested entity was not found")) {
-                setError("Your API key appears to be invalid. Please select a new one.");
-                setHasApiKey(false);
-            } else {
-                 console.error("Failed to generate scene description:", err);
-                 setError("Could not generate a description for the scene. Please write one manually.");
-                 setEditPrompt('Add the monument to the scene, making it look natural');
-            }
+            console.error("Failed to generate scene description:", err);
+            setError("Could not generate a description for the scene. Please write one manually.");
+            setEditPrompt('Add the monument to the scene, making it look natural');
         } finally {
             setIsGeneratingPrompt(false);
         }
@@ -653,52 +583,6 @@ Instructions:
                 );
         }
     };
-    
-    if (isCheckingApiKey) {
-        return (
-            <div className="min-h-screen bg-slate-900 text-white font-sans flex flex-col">
-                <Header />
-                <main className="flex-grow container mx-auto p-4 sm:p-8 flex items-center justify-center">
-                    <div className="text-center space-y-4">
-                        <svg className="animate-spin mx-auto h-12 w-12 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <p className="text-lg text-slate-300 font-semibold">Verifying API key...</p>
-                    </div>
-                </main>
-            </div>
-        );
-    }
-    
-    if (!hasApiKey) {
-        return (
-            <div className="min-h-screen bg-slate-900 text-white font-sans flex flex-col">
-                <Header />
-                <main className="flex-grow container mx-auto p-4 sm:p-8 flex items-center justify-center">
-                    <div className="w-full max-w-lg bg-slate-800/50 rounded-2xl shadow-2xl shadow-cyan-500/10 p-6 sm:p-8 border border-slate-700 text-center space-y-6">
-                         <h2 className="text-2xl font-bold text-slate-200">API Key Required</h2>
-                         <p className="text-slate-400">
-                             To use Monument Mixer AI, you'll need to select a Gemini API key. This helps manage usage quotas and prevents errors.
-                         </p>
-                         <button 
-                            onClick={handleSelectKey}
-                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg flex items-center justify-center gap-3"
-                         >
-                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
-                                <path fillRule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a4 4 0 100 8 4 4 0 000-8z" clipRule="evenodd" />
-                            </svg>
-                            Select API Key
-                         </button>
-                         <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-sm text-slate-500 hover:text-cyan-400 transition-colors inline-block">
-                            Learn more about billing
-                         </a>
-                         {error && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mt-4 text-left">{error}</div>}
-                    </div>
-                </main>
-            </div>
-        );
-    }
     
     return (
         <div className="min-h-screen bg-slate-900 text-white font-sans flex flex-col">
