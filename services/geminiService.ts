@@ -8,7 +8,7 @@ export async function generateMonumentImage(
 ): Promise<string> {
   // It's recommended to initialize the AI client just before the call 
   // to ensure it uses the most up-to-date API key.
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+  const ai = new GoogleGenAI({ apiKey: process.env.NEXT_PUBLIC_API_KEY as string });
 
   const parts: Part[] = [{ text: prompt }];
 
