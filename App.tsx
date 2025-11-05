@@ -1,58 +1,22 @@
-import React, { useState, useCallback, useEffect } from 'react';
-import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
+import React, { useState, useCallback } from 'react';
 import Header from './components/Header';
 import ImageUploader from './components/ImageUploader';
 import Loader from './components/Loader';
 import CommentSection from './components/CommentSection';
 
-// Helper to convert File to a format suitable for the Gemini API
-const fileToGenerativePart = async (file: File) => {
-  const base64EncodedDataPromise = new Promise<string>((resolve) => {
+// Helper to convert File to base64
+const fileToBase64 = (file: File): Promise<string> => {
+  return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+    reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-  return {
-    inlineData: { data: await base64EncodedDataPromise, mimeType: file.type },
-  };
-};
-
-// Helper to convert a data URL (base64) string to a File object
-const dataURLtoFile = (dataurl: string, filename: string): File => {
-    const arr = dataurl.split(',');
-    const mimeMatch = arr[0].match(/:(.*?);/);
-    if (!mimeMatch) throw new Error("Invalid data URL");
-    const mime = mimeMatch[1];
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while (n--) {
-        u8arr[n] = bstr.charCodeAt(n);
-    }
-    return new File([u8arr], filename, { type: mime });
-}
-
-// Helper to safely extract image URL from a Gemini response
-const getImageUrlFromResponse = (response: GenerateContentResponse): string | null => {
-    if (response.candidates && response.candidates.length > 0) {
-        const firstCandidate = response.candidates[0];
-        if (firstCandidate.content && firstCandidate.content.parts) {
-            for (const part of firstCandidate.content.parts) {
-                if (part.inlineData) {
-                    return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-                }
-            }
-        }
-    }
-    return null;
 };
 
 type Step = 'CREATE_MONUMENT' | 'PLACE_IN_SCENE' | 'SHARE';
 
 const App: React.FC = () => {
-    const [apiKey, setApiKey] = useState<string>('');
-    const [apiKeyConfirmed, setApiKeyConfirmed] = useState<boolean>(false);
-    
     const [step, setStep] = useState<Step>('CREATE_MONUMENT');
     const [monumentSource, setMonumentSource] = useState<'prompt' | 'upload'>('prompt');
     const [monumentPrompt, setMonumentPrompt] = useState<string>('A majestic crystal obelisk monument, futuristic, glowing');
@@ -71,40 +35,35 @@ const App: React.FC = () => {
     const [isLinkCopied, setIsLinkCopied] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     
-    const getGenAI = useCallback(() => {
-        if (!apiKeyConfirmed || !apiKey) {
-            setApiKeyConfirmed(false);
-            throw new Error("API Key not provided. Please enter your API key to continue.");
-        }
-        return new GoogleGenAI({ apiKey });
-    }, [apiKey, apiKeyConfirmed]);
-
     const handleError = (err: unknown) => {
         const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-        // If the error is about an invalid key, force the user back to the selection screen.
-        if (errorMessage.includes("API key not valid") || errorMessage.includes("API key is invalid") || errorMessage.includes("permission denied")) {
-            setError("Your API key appears to be invalid. Please enter a valid key to continue.");
-            setApiKeyConfirmed(false);
-        } else if (errorMessage.includes("quota")){
-            setError("You've exceeded your API quota. Please check your billing details or use a different key.");
+        if (errorMessage.includes("quota")){
+            setError("You've exceeded your API quota. Please check your billing details or redeploy with a new key.");
         } else {
             setError(errorMessage);
         }
         console.error(err);
     }
 
-    const handleApiKeySubmit = () => {
-        if (apiKey.trim()) {
-            setApiKeyConfirmed(true);
-            setError(null);
-        } else {
-            setError("Please enter a valid API key.");
+    // Generic function to call our secure backend
+    const callGenerateApi = async (body: object): Promise<any> => {
+        const response = await fetch('/api/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.error || `Request failed with status ${response.status}`);
         }
+
+        return response.json();
     };
 
     const changeMonumentSource = (source: 'prompt' | 'upload') => {
-        setGeneratedMonument(null); // Reset on tab switch
-        setMonumentFile(null);      // Reset on tab switch
+        setGeneratedMonument(null);
+        setMonumentFile(null);
         setMonumentSource(source);
         setError(null);
         if (source === 'upload') {
@@ -115,7 +74,7 @@ const App: React.FC = () => {
     };
 
     const changeSceneSource = (source: 'prompt' | 'upload') => {
-        setSceneFile(null); // Reset file on tab switch
+        setSceneFile(null);
         setError(null);
         setSceneSource(source);
         if (source === 'prompt') {
@@ -134,24 +93,10 @@ const App: React.FC = () => {
         setLoadingMessage('Generating your monument...');
         setError(null);
         try {
-            const ai = getGenAI();
-
-            const fullPrompt = `Create a photorealistic 3D render of a monument based on the following description: "${monumentPrompt}".
-
-Key requirements:
-1.  **Object:** The monument should be a high-quality, solid, three-dimensional object.
-2.  **Base:** It MUST be placed on a simple, elegant plinth or base that complements its design.
-3.  **Appearance:** The monument should look new and unweathered, with realistic textures and materials.
-4.  **Lighting:** Use studio lighting to give it a sense of depth and form.
-5.  **Background:** The final image must ONLY contain the monument and its base on a plain, neutral, single-color background (e.g., light grey), with no scenery. This is for later compositing.`;
-
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: { parts: [{ text: fullPrompt }] },
-                config: { responseModalities: [Modality.IMAGE] },
+            const { imageUrl } = await callGenerateApi({
+                type: 'generateMonumentFromPrompt',
+                prompt: monumentPrompt,
             });
-            
-            const imageUrl = getImageUrlFromResponse(response);
 
             if (imageUrl) {
                 setGeneratedMonument(imageUrl);
@@ -163,15 +108,11 @@ Key requirements:
         } finally {
             setIsLoading(false);
         }
-    }, [monumentPrompt, getGenAI]);
+    }, [monumentPrompt]);
 
     const handleGenerateMonumentFromImage = useCallback(async () => {
-        if (!monumentFile) {
-            setError('Please upload an image to generate a monument from.');
-            return;
-        }
-        if (!monumentPrompt) {
-            setError('Please enter a prompt to guide the monument generation.');
+        if (!monumentFile || !monumentPrompt) {
+            setError('Please upload an image and provide a style prompt.');
             return;
         }
 
@@ -180,31 +121,15 @@ Key requirements:
         setError(null);
 
         try {
-            const ai = getGenAI();
-            const imagePart = await fileToGenerativePart(monumentFile);
-            
-            const fullPrompt = `Task: Create a photorealistic 3D render of a monument based on the main subject of the provided image.
-
-Instructions:
-1.  **Isolate Subject:** Identify and perfectly isolate the main subject from the input image. Discard the original background entirely.
-2.  **Transform into a Monument:** Re-imagine and render the isolated subject as a high-quality, solid monument. The monument should be styled as: "${monumentPrompt}".
-3.  **Add a Base:** Place the monument on a simple, elegant plinth or base that complements its design (e.g., a square marble block, a cylindrical stone pedestal). The base is essential.
-4.  **Material and Texture:** The monument's surface should have realistic textures and lighting appropriate for the specified material. It should look like a solid, three-dimensional object, not a re-colored photo. It should look new and unweathered.
-5.  **Lighting:** Use dramatic studio lighting to highlight the monument's form and texture, creating realistic highlights and soft shadows on the object itself.
-6.  **Final Output:** The final image must ONLY contain the monument and its base on a plain, neutral, single-color background (like light grey). There should be no background scenery. This output is for later compositing.`;
-
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: {
-                    parts: [
-                        imagePart,
-                        { text: fullPrompt },
-                    ],
+            const imageBase64 = await fileToBase64(monumentFile);
+            const { imageUrl } = await callGenerateApi({
+                type: 'generateMonumentFromImage',
+                prompt: monumentPrompt,
+                image: {
+                    data: imageBase64,
+                    mimeType: monumentFile.type,
                 },
-                config: { responseModalities: [Modality.IMAGE] },
             });
-
-            const imageUrl = getImageUrlFromResponse(response);
 
             if (imageUrl) {
                 setGeneratedMonument(imageUrl);
@@ -216,7 +141,7 @@ Instructions:
         } finally {
             setIsLoading(false);
         }
-    }, [monumentFile, monumentPrompt, getGenAI]);
+    }, [monumentFile, monumentPrompt]);
 
     const handleSceneUpload = useCallback(async (file: File) => {
         setSceneFile(file);
@@ -224,16 +149,15 @@ Instructions:
         setEditPrompt('Generating scene description...');
         setError(null);
         try {
-            const ai = getGenAI();
-            const imagePart = await fileToGenerativePart(file);
-            const prompt = "Briefly describe this image for an AI photo editing prompt. Focus on the main environment. For example: 'a sandy beach at sunset' or 'a snowy mountain range'.";
-            
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: { parts: [imagePart, { text: prompt }] },
+            const imageBase64 = await fileToBase64(file);
+            const { description } = await callGenerateApi({
+                type: 'describeScene',
+                image: {
+                    data: imageBase64,
+                    mimeType: file.type,
+                },
             });
             
-            const description = response.text.trim();
             setEditPrompt(`Add the monument to ${description}, making it look natural`);
 
         } catch (err) {
@@ -243,23 +167,15 @@ Instructions:
         } finally {
             setIsGeneratingPrompt(false);
         }
-    }, [getGenAI]);
+    }, []);
 
     const handlePlaceMonument = useCallback(async () => {
         if (!generatedMonument) {
             setError('No monument has been created.');
             return;
         }
-        if (sceneSource === 'upload' && !sceneFile) {
-            setError('Please upload a scene image.');
-            return;
-        }
-        if (sceneSource === 'prompt' && !scenePrompt) {
-            setError('Please enter a prompt for the scene.');
-            return;
-        }
-        if (!editPrompt) {
-            setError('Please provide editing instructions.');
+        if ((sceneSource === 'upload' && !sceneFile) || (sceneSource === 'prompt' && !scenePrompt) || !editPrompt) {
+             setError('Please provide all required inputs for the scene.');
             return;
         }
         
@@ -267,59 +183,27 @@ Instructions:
         setError(null);
         
         try {
-            const ai = getGenAI();
-            let sceneToUseFile: File;
+            const monumentBase64 = generatedMonument.split(',')[1];
+            let sceneDataBase64;
+            let sceneMimeType;
 
-            if (sceneSource === 'prompt') {
-                setLoadingMessage('Generating scene from prompt...');
-                const response = await ai.models.generateContent({
-                    model: 'gemini-2.5-flash-image',
-                    contents: { parts: [{ text: scenePrompt }] },
-                    config: { responseModalities: [Modality.IMAGE] },
-                });
-
-                const sceneImageUrl = getImageUrlFromResponse(response);
-
-                if (!sceneImageUrl) {
-                    throw new Error("Failed to generate a scene from the prompt.");
-                }
-
-                sceneToUseFile = dataURLtoFile(sceneImageUrl, 'scene.png');
-            } else {
-                sceneToUseFile = sceneFile!;
+            if (sceneSource === 'upload' && sceneFile) {
+                setLoadingMessage('Placing monument in your scene...');
+                sceneDataBase64 = await fileToBase64(sceneFile);
+                sceneMimeType = sceneFile.type;
+            } else { // sceneSource === 'prompt'
+                setLoadingMessage('Generating scene and placing monument...');
             }
 
-            setLoadingMessage('Placing monument in scene...');
-            
-            const monumentFile = dataURLtoFile(generatedMonument, 'monument.png');
-            const sceneImagePart = await fileToGenerativePart(sceneToUseFile);
-            const monumentImagePart = await fileToGenerativePart(monumentFile);
-
-            const finalEditPrompt = `Task: Photorealistically integrate the monument from the second image into the scene from the first image.
-
-Instructions:
-1.  **Scene Analysis:** Analyze the first image (the scene) to understand its lighting, perspective, and overall style.
-2.  **Object Integration:** Use the second image as a reference for the monument.
-3.  **Placement:** Follow this instruction for placement: "${editPrompt}".
-4.  **Realism:**
-    *   **Scale & Perspective:** Adjust the monument's size and perspective to fit realistically within the scene. It should look like it belongs there, not like a sticker.
-    *   **Lighting & Shadows:** The monument must be lit according to the scene's light sources. It must cast realistic shadows on the ground and surrounding objects that match the direction and softness of existing shadows in the scene.
-    *   **Color & Style:** The monument's colors and textures should be integrated with the scene's color grading and atmosphere.
-5.  **Output:** The final image must preserve the quality and dimensions of the original scene.`;
-
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: {
-                    parts: [
-                        sceneImagePart,
-                        monumentImagePart,
-                        { text: finalEditPrompt },
-                    ],
-                },
-                config: { responseModalities: [Modality.IMAGE] },
+            const { finalImageUrl } = await callGenerateApi({
+                type: 'placeMonument',
+                sceneSource,
+                scenePrompt: sceneSource === 'prompt' ? scenePrompt : undefined,
+                sceneImage: sceneSource === 'upload' ? { data: sceneDataBase64, mimeType: sceneMimeType } : undefined,
+                monumentImage: { data: monumentBase64, mimeType: 'image/png' },
+                editPrompt,
             });
-
-            const finalImageUrl = getImageUrlFromResponse(response);
+            
 
             if (finalImageUrl) {
                 setFinalImage(finalImageUrl);
@@ -333,43 +217,7 @@ Instructions:
         } finally {
             setIsLoading(false);
         }
-    }, [getGenAI, generatedMonument, sceneFile, sceneSource, scenePrompt, editPrompt]);
-    
-    // API Key entry screen
-    if (!apiKeyConfirmed) {
-        return (
-            <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 p-4">
-                <div className="w-full max-w-md bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700">
-                    <div className="flex items-center gap-3 mb-6">
-                        <svg className="w-8 h-8 text-cyan-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 21 8-8 1.5 1.5 8-8"/><path d="M7 3h14v14"/><path d="m22 2-2.5 2.5"/><path d="m19 5-2.5 2.5"/><path d="m16 8-2.5 2.5"/></svg>
-                        <h1 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-500">Monument Mixer AI</h1>
-                    </div>
-                    <h2 className="text-lg font-semibold text-slate-200 mb-2">Enter Your API Key</h2>
-                    <p className="text-slate-400 text-sm mb-6">
-                        To use this application, you need a Google AI API key. Your key is only used for this session and is not stored.
-                    </p>
-                    <div className="flex flex-col gap-4">
-                        <input
-                            type="password"
-                            value={apiKey}
-                            onChange={(e) => setApiKey(e.target.value)}
-                            placeholder="Enter your Google AI API Key"
-                            className="w-full bg-slate-900 border border-slate-700 rounded-md py-2 px-4 text-slate-300 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
-                            onKeyDown={(e) => e.key === 'Enter' && handleApiKeySubmit()}
-                        />
-                        <button
-                            onClick={handleApiKeySubmit}
-                            className="w-full bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-2 px-4 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            disabled={!apiKey.trim()}
-                        >
-                            Continue
-                        </button>
-                    </div>
-                    {error && <p className="text-red-400 text-sm mt-4 text-center">{error}</p>}
-                </div>
-            </div>
-        );
-    }
+    }, [generatedMonument, sceneFile, sceneSource, scenePrompt, editPrompt]);
     
     // Main Application
     return (
@@ -377,6 +225,11 @@ Instructions:
             {isLoading && <Loader message={loadingMessage} />}
             <Header />
             <main className="container mx-auto p-4 sm:p-8">
+                {error && (
+                    <div className="max-w-4xl mx-auto bg-red-900/50 border border-red-700 text-red-300 p-4 rounded-lg mb-6 text-center">
+                        <p>{error}</p>
+                    </div>
+                 )}
                 {/* Step 1: Create Monument */}
                 {step === 'CREATE_MONUMENT' && (
                     <section>
@@ -442,8 +295,6 @@ Instructions:
                                     )}
                                 </div>
                             </div>
-                            
-                            {error && <p className="text-red-400 text-sm mt-4 text-center">{error}</p>}
                             
                             <div className="mt-8 text-center">
                                 <button
@@ -516,7 +367,6 @@ Instructions:
                                             disabled={isGeneratingPrompt}
                                         />
                                     </div>
-                                     {error && <p className="text-red-400 text-sm mt-2 text-center">{error}</p>}
 
                                      <button
                                         onClick={handlePlaceMonument}
