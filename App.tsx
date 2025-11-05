@@ -6,14 +6,15 @@ import ImageUploader from './components/ImageUploader';
 import Loader from './components/Loader';
 import CommentSection from './components/CommentSection';
 
+// FIX: Define a named interface `AIStudio` to resolve the type conflict.
 // Add types for window.aistudio
-// FIX: Refactored the global type declaration for `window.aistudio` to use an anonymous inline type to resolve a TypeScript error.
+interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+}
 declare global {
     interface Window {
-        aistudio?: {
-            hasSelectedApiKey: () => Promise<boolean>;
-            openSelectKey: () => Promise<void>;
-        };
+        aistudio?: AIStudio;
     }
 }
 
@@ -84,31 +85,44 @@ const App: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
-        // Wrap the check in a timeout to give the aistudio object a moment to initialize.
-        const timer = setTimeout(async () => {
-            try {
-                if (window.aistudio) {
+        let attempts = 0;
+        const checkInterval = setInterval(async () => {
+            attempts++;
+            if (typeof window.aistudio?.hasSelectedApiKey === 'function') {
+                clearInterval(checkInterval);
+                try {
                     const hasKey = await window.aistudio.hasSelectedApiKey();
                     setHasApiKey(hasKey);
+                } catch (e) {
+                    console.error("Error checking for API key:", e);
+                    setError("Could not verify API key status.");
+                } finally {
+                    setIsCheckingApiKey(false);
                 }
-            } catch (e) {
-                console.error("Error checking for API key:", e);
-                setError("Could not verify API key status.");
-            } finally {
-                setIsCheckingApiKey(false);
+            } else if (attempts > 10) { // Give it ~2 seconds
+                clearInterval(checkInterval);
+                console.warn("aistudio API not found.");
+                setIsCheckingApiKey(false); // Stop loading and show the button
             }
-        }, 300);
+        }, 200);
 
-        return () => clearTimeout(timer); // Cleanup timeout on unmount
+        return () => clearInterval(checkInterval);
     }, []);
 
     const handleSelectKey = async () => {
         setError(null);
         try {
-            if(window.aistudio) {
+            if (window.aistudio) {
                 await window.aistudio.openSelectKey();
-                // Optimistically set to true, assuming user selected a key.
-                setHasApiKey(true); 
+                // Re-verify after the dialog is closed. This is not optimistic.
+                const hasKey = await window.aistudio.hasSelectedApiKey();
+                setHasApiKey(hasKey);
+                 if (!hasKey) {
+                    // This case can happen if the user closes the dialog without selecting a key
+                    console.warn("User closed the select key dialog without choosing a key.");
+                 }
+            } else {
+                 setError("API key selection feature is not available.");
             }
         } catch (e) {
             console.error("Error opening select key dialog:", e);
