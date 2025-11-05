@@ -1,9 +1,23 @@
-import React, { useState, useCallback } from 'react';
+
+import React, { useState, useCallback, useEffect } from 'react';
 import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
 import Header from './components/Header';
 import ImageUploader from './components/ImageUploader';
 import Loader from './components/Loader';
 import CommentSection from './components/CommentSection';
+
+// Add types for window.aistudio
+// FIX: Defined a named interface `AIStudio` to resolve the TypeScript error with subsequent property declarations on the global Window object.
+interface AIStudio {
+    hasSelectedApiKey: () => Promise<boolean>;
+    openSelectKey: () => Promise<void>;
+}
+declare global {
+    interface Window {
+        aistudio?: AIStudio;
+    }
+}
+
 
 // Helper to convert File to a format suitable for the Gemini API
 const fileToGenerativePart = async (file: File) => {
@@ -50,7 +64,7 @@ const getImageUrlFromResponse = (response: GenerateContentResponse): string | nu
 type Step = 'CREATE_MONUMENT' | 'PLACE_IN_SCENE' | 'SHARE';
 
 const App: React.FC = () => {
-    const [apiKey, setApiKey] = useState<string>('');
+    const [hasApiKey, setHasApiKey] = useState<boolean>(false);
     const [step, setStep] = useState<Step>('CREATE_MONUMENT');
     const [monumentSource, setMonumentSource] = useState<'prompt' | 'upload'>('prompt');
     const [monumentPrompt, setMonumentPrompt] = useState<string>('A majestic crystal obelisk monument, futuristic, glowing');
@@ -69,7 +83,49 @@ const App: React.FC = () => {
     const [isLinkCopied, setIsLinkCopied] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
 
-    const isApiKeyMissing = !apiKey;
+    useEffect(() => {
+        const checkApiKey = async () => {
+            try {
+                if (window.aistudio) {
+                    const hasKey = await window.aistudio.hasSelectedApiKey();
+                    setHasApiKey(hasKey);
+                }
+            } catch (e) {
+                console.error("Error checking for API key:", e);
+                setError("Could not verify API key status.");
+            }
+        };
+        checkApiKey();
+    }, []);
+
+    const handleSelectKey = async () => {
+        setError(null);
+        try {
+            if(window.aistudio) {
+                await window.aistudio.openSelectKey();
+                // Optimistically set to true, assuming user selected a key.
+                setHasApiKey(true); 
+            }
+        } catch (e) {
+            console.error("Error opening select key dialog:", e);
+            setError("Could not open the API key selection dialog.");
+        }
+    };
+    
+    const handleError = (err: unknown) => {
+        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+        if (errorMessage.includes("API key not valid") || errorMessage.includes("Requested entity was not found")) {
+            setError("Your API key appears to be invalid. Please select a new one.");
+            setHasApiKey(false);
+        } else if (errorMessage.includes("quota")){
+            setError("You've exceeded your API quota. Please check your billing details or try a different key.");
+            setHasApiKey(false);
+        }
+        else {
+            setError(errorMessage);
+        }
+        console.error(err);
+    }
 
     const changeMonumentSource = (source: 'prompt' | 'upload') => {
         setGeneratedMonument(null); // Reset on tab switch
@@ -95,10 +151,6 @@ const App: React.FC = () => {
     };
 
     const handleGenerateMonument = useCallback(async () => {
-        if (!apiKey) {
-             setError("API key is not configured. Please enter it above.");
-             return;
-        }
         if (!monumentPrompt) {
             setError('Please enter a prompt for the monument.');
             return;
@@ -107,7 +159,7 @@ const App: React.FC = () => {
         setLoadingMessage('Generating your monument...');
         setError(null);
         try {
-            const ai = new GoogleGenAI({ apiKey });
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
             const fullPrompt = `Create a photorealistic 3D render of a monument based on the following description: "${monumentPrompt}".
 
@@ -132,18 +184,13 @@ Key requirements:
                 throw new Error("No image was generated.");
             }
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'An unknown error occurred.');
-            console.error(err);
+            handleError(err);
         } finally {
             setIsLoading(false);
         }
-    }, [monumentPrompt, apiKey]);
+    }, [monumentPrompt]);
 
     const handleGenerateMonumentFromImage = useCallback(async () => {
-        if (!apiKey) {
-             setError("API key is not configured. Please enter it above.");
-             return;
-        }
         if (!monumentFile) {
             setError('Please upload an image to generate a monument from.');
             return;
@@ -158,7 +205,7 @@ Key requirements:
         setError(null);
 
         try {
-            const ai = new GoogleGenAI({ apiKey });
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
             const imagePart = await fileToGenerativePart(monumentFile);
             
             const fullPrompt = `Task: Create a photorealistic 3D render of a monument based on the main subject of the provided image.
@@ -190,23 +237,18 @@ Instructions:
                 throw new Error("No image was generated from the provided image.");
             }
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'An unknown error occurred.');
-            console.error(err);
+            handleError(err);
         } finally {
             setIsLoading(false);
         }
-    }, [monumentFile, monumentPrompt, apiKey]);
+    }, [monumentFile, monumentPrompt]);
 
     const handleSceneUpload = async (file: File) => {
         setSceneFile(file);
-         if (!apiKey) {
-             setError("API key is not configured. Please enter it above.");
-             return;
-        }
         setIsGeneratingPrompt(true);
         setEditPrompt('Generating scene description...');
         try {
-            const ai = new GoogleGenAI({ apiKey });
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
             const imagePart = await fileToGenerativePart(file);
             const prompt = "Briefly describe this image for an AI photo editing prompt. Focus on the main environment. For example: 'a sandy beach at sunset' or 'a snowy mountain range'.";
             
@@ -219,19 +261,21 @@ Instructions:
             setEditPrompt(`Add the monument to ${description}, making it look natural`);
 
         } catch (err) {
-            console.error("Failed to generate scene description:", err);
-            setError("Could not generate a description for the scene. Please write one manually.");
-            setEditPrompt('Add the monument to the scene, making it look natural');
+            const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+            if (errorMessage.includes("API key not valid") || errorMessage.includes("Requested entity was not found")) {
+                setError("Your API key appears to be invalid. Please select a new one.");
+                setHasApiKey(false);
+            } else {
+                 console.error("Failed to generate scene description:", err);
+                 setError("Could not generate a description for the scene. Please write one manually.");
+                 setEditPrompt('Add the monument to the scene, making it look natural');
+            }
         } finally {
             setIsGeneratingPrompt(false);
         }
     };
 
     const handlePlaceMonument = useCallback(async () => {
-        if (!apiKey) {
-             setError("API key is not configured. Please enter it above.");
-             return;
-        }
         if (!generatedMonument) {
             setError('No monument has been created.');
             return;
@@ -253,7 +297,7 @@ Instructions:
         setError(null);
         
         try {
-            const ai = new GoogleGenAI({ apiKey });
+            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
             let sceneToUseFile: File;
 
             if (sceneSource === 'prompt') {
@@ -314,12 +358,11 @@ Instructions:
                 throw new Error("Image editing failed.");
             }
         } catch (err) {
-            setError(err instanceof Error ? err.message : 'An unknown error occurred.');
-            console.error(err);
+            handleError(err);
         } finally {
             setIsLoading(false);
         }
-    }, [generatedMonument, sceneFile, sceneSource, scenePrompt, editPrompt, apiKey]);
+    }, [generatedMonument, sceneFile, sceneSource, scenePrompt, editPrompt]);
     
     const reset = () => {
         setStep('CREATE_MONUMENT');
@@ -360,7 +403,7 @@ Instructions:
                                         className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
                                     />
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                        <button disabled={isApiKeyMissing} onClick={handleGenerateMonument} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg disabled:bg-slate-600 disabled:cursor-not-allowed">
+                                        <button onClick={handleGenerateMonument} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
                                             Re-generate
                                         </button>
                                         <button onClick={() => setStep('PLACE_IN_SCENE')} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
@@ -381,7 +424,7 @@ Instructions:
                                         placeholder="e.g., A giant statue of a cat playing a banjo"
                                         className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
                                     />
-                                    <button disabled={isApiKeyMissing} onClick={handleGenerateMonument} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg disabled:bg-slate-600 disabled:cursor-not-allowed">
+                                    <button onClick={handleGenerateMonument} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
                                         Generate Monument
                                     </button>
                                 </div>
@@ -408,7 +451,7 @@ Instructions:
                                         className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
                                     />
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                        <button disabled={isApiKeyMissing} onClick={handleGenerateMonumentFromImage} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg disabled:bg-slate-600 disabled:cursor-not-allowed">
+                                        <button onClick={handleGenerateMonumentFromImage} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
                                             Re-generate
                                         </button>
                                         <button onClick={() => setStep('PLACE_IN_SCENE')} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
@@ -435,7 +478,7 @@ Instructions:
                                         className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
                                     />
                                     <button 
-                                        disabled={!monumentFile || isApiKeyMissing} 
+                                        disabled={!monumentFile} 
                                         onClick={handleGenerateMonumentFromImage} 
                                         className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg disabled:bg-slate-600 disabled:cursor-not-allowed"
                                     >
@@ -461,7 +504,7 @@ Instructions:
                                     className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
                                 />
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <button disabled={isApiKeyMissing} onClick={handlePlaceMonument} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg disabled:bg-slate-600 disabled:cursor-not-allowed">
+                                    <button onClick={handlePlaceMonument} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
                                         Re-generate
                                     </button>
                                     <button onClick={() => setStep('SHARE')} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
@@ -508,7 +551,7 @@ Instructions:
                                    </div>
                                 </div>
                                 <button 
-                                    disabled={!editPrompt || (sceneSource === 'upload' && (!sceneFile || isGeneratingPrompt)) || (sceneSource === 'prompt' && !scenePrompt) || isApiKeyMissing} 
+                                    disabled={!editPrompt || (sceneSource === 'upload' && (!sceneFile || isGeneratingPrompt)) || (sceneSource === 'prompt' && !scenePrompt)} 
                                     onClick={handlePlaceMonument} 
                                     className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg disabled:bg-slate-600 disabled:cursor-not-allowed"
                                 >
@@ -564,7 +607,7 @@ Instructions:
                                     <span>Facebook</span>
                                 </a>
                                  <a href={`https://www.reddit.com/submit?url=${encodeURIComponent(appUrl)}&title=${encodeURIComponent("My AI Creation from Monument Mixer")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
-                                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M22.5,11.85a1.2,1.2,0,0,0-1.12-1,1.17,1.17,0,0,0-.3.05,6.3,6.3,0,0,0-5-3.21,1.19,1.19,0,0,0-1,.08,1.2,1.2,0,0,0-.73,1.06v.2a12.89,12.89,0,0,0-4.64,0v-.2a1.2,1.2,0,0,0-.73-1.06,1.18,1.18,0,0,0-1-.08,6.3,6.3,0,0,0-5,3.21,1.19,1.19,0,0,0-.3-.05,1.2,1.2,0,0,0-1.12,1,1.18,1.18,0,0,0,.6,1,10.19,10.19,0,0,0,0,4.68,1.18,1.18,0,0,0-.6,1,1.2,1.2,0,0,0,1.12,1,1.17,1.17,0,0,0,.3-.05,6.3,6.3,0,0,0,5,3.21,1.19,1.19,0,0,0,1-.08,1.2,1.2,0,0,0,.73-1.06v-.2a12.89,12.89,0,0,0,4.64,0v.2a1.2,1.2,0,0,0,.73,1.06,1.18,1.18,0,0,0,1,.08,6.3,6.3,0,0,0,5-3.21,1.19,1.19,0,0,0,.3.05,1.2,1.2,0,0,0,1.12-1,1.18,1.18,0,0,0-.6-1,10.19,10.19,0,0,0,0-4.68A1.18,1.18,0,0,0,22.5,11.85ZM8.73,15.1a1.68,1.68,0,0,1-2.13,0,1.19,1.19,0,0,1,0-1.72,1.68,1.68,0,0,1,2.13,0,1.19,1.19,0,0,1,0,1.72Zm6.53,0a1.68,1.68,0,0,1-2.13,0,1.19,1.19,0,0,1,0-1.72,1.68,1.68,0,0,1,2.13,0,1.19,1.19,0,0,1,0,1.72Zm17,9.11a3,3,0,0,1-4.83,1.08,1.2,1.2,0,0,1-1.33,0A3,3,0,0,1,7,9.11a1.2,1.2,0,0,1,2.06-.71,1.22,1.22,0,0,1,.29.89,1.53,1.53,0,0,0,3.06,0,1.22,1.22,0,0,1,.29-.89A1.2,1.2,0,0,1,17,9.11Z"/></svg>
+                                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M22.5,11.85a1.2,1.2,0,0,0-1.12-1,1.17,1.17,0,0,0-.3.05,6.3,6.3,0,0,0-5-3.21,1.19,1.19,0,0,0-1,.08,1.2,1.2,0,0,0-.73,1.06v.2a12.89,12.89,0,0,0-4.64,0v-.2a1.2,1.2,0,0,0-.73-1.06,1.18,1.18,0,0,0-1-.08,6.3,6.3,0,0,0-5,3.21,1.19,1.19,0,0,0-.3-.05,1.2,1.2,0,0,0-1.12,1,1.18,1.18,0,0,0,.6,1,10.19,10.19,0,0,0,0,4.68,1.18,1.18,0,0,0-.6,1,1.2,1.2,0,0,0,1.12,1,1.17,1.17,0,0,0,.3-.05,6.3,6.3,0,0,0,5,3.21,1.19,1.19,0,0,0,1-.08,1.2,1.2,0,0,0,.73-1.06v-.2a12.89,12.89,0,0,0,4.64,0v.2a1.2,1.2,0,0,0,.73,1.06,1.18,1.18,0,0,0,1,.08,6.3,6.3,0,0,0,5-3.21,1.19,1.19,0,0,0,.3.05,1.2,1.2,0,0,0,1.12-1,1.18,1.18,0,0,0-.6-1,10.19,10.19,0,0,0,0-4.68A1.18,1.18,0,0,0,22.5,11.85ZM8.73,15.1a1.68,1.68,0,0,1-2.13,0,1.19,1.19,0,0,1,0-1.72,1.68,1.68,0,0,1,2.13,0,1.19,1.19,0,0,1,0,1.72Zm6.53,0a1.68,1.68,0,0,1-2.13,0,1.19,1.19,0,0,1,0-1.72,1.68,1.68,0,0,1,2.13,0,1.19,1.19,0,0,1,0,1.72Zm1-5.99a3,3,0,0,1-4.83,1.08,1.2,1.2,0,0,1-1.33,0A3,3,0,0,1,7,9.11a1.2,1.2,0,0,1,2.06-.71,1.22,1.22,0,0,1,.29.89,1.53,1.53,0,0,0,3.06,0,1.22,1.22,0,0,1,.29-.89A1.2,1.2,0,0,1,17,9.11Z"/></svg>
                                     <span>Reddit</span>
                                 </a>
                                 <button onClick={handleInstagramShare} className="inline-flex items-center gap-2 bg-pink-600 hover:bg-pink-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
@@ -593,40 +636,43 @@ Instructions:
         }
     };
     
+    if (!hasApiKey) {
+        return (
+            <div className="min-h-screen bg-slate-900 text-white font-sans flex flex-col">
+                <Header />
+                <main className="flex-grow container mx-auto p-4 sm:p-8 flex items-center justify-center">
+                    <div className="w-full max-w-lg bg-slate-800/50 rounded-2xl shadow-2xl shadow-cyan-500/10 p-6 sm:p-8 border border-slate-700 text-center space-y-6">
+                         <h2 className="text-2xl font-bold text-slate-200">API Key Required</h2>
+                         <p className="text-slate-400">
+                             To use Monument Mixer AI, you'll need to select a Gemini API key. This helps manage usage quotas and prevents errors.
+                         </p>
+                         <button 
+                            onClick={handleSelectKey}
+                            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg flex items-center justify-center gap-3"
+                         >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M18 8a6 6 0 01-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1118 8zm-6-4a4 4 0 100 8 4 4 0 000-8z" clipRule="evenodd" />
+                            </svg>
+                            Select API Key
+                         </button>
+                         <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="text-sm text-slate-500 hover:text-cyan-400 transition-colors inline-block">
+                            Learn more about billing
+                         </a>
+                         {error && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mt-4 text-left">{error}</div>}
+                    </div>
+                </main>
+            </div>
+        );
+    }
+    
     return (
         <div className="min-h-screen bg-slate-900 text-white font-sans flex flex-col">
             <Header />
             <main className="flex-grow container mx-auto p-4 sm:p-8 flex items-center justify-center">
                 <div className="w-full max-w-2xl bg-slate-800/50 rounded-2xl shadow-2xl shadow-cyan-500/10 p-6 sm:p-8 border border-slate-700">
                     {isLoading && <Loader message={loadingMessage} />}
-                    
-                    <div className="space-y-4 mb-6">
-                         <label htmlFor="api-key-input" className="block text-sm font-medium text-slate-400">
-                           Google AI API Key
-                        </label>
-                        <input
-                            id="api-key-input"
-                            type="password"
-                            value={apiKey}
-                            onChange={(e) => {
-                                setApiKey(e.target.value);
-                                setError(null); // Clear errors when user types
-                            }}
-                            placeholder="Enter your API key here"
-                            className="w-full bg-slate-900 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
-                        />
-                         {isApiKeyMissing && !error && (
-                            <p className="text-xs text-slate-500">
-                                Your API key is stored only in your browser and is required to use the app.
-                            </p>
-                        )}
-                    </div>
-                    
                     {error && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mb-4">{error}</div>}
-
-                    <div className="border-t border-slate-700 pt-6">
-                        {renderStep()}
-                    </div>
+                    {renderStep()}
                 </div>
             </main>
         </div>
