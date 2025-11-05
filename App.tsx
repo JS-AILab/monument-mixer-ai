@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { GoogleGenAI, Modality, GenerateContentResponse } from "@google/genai";
 import Header from './components/Header';
@@ -51,6 +50,9 @@ const getImageUrlFromResponse = (response: GenerateContentResponse): string | nu
 type Step = 'CREATE_MONUMENT' | 'PLACE_IN_SCENE' | 'SHARE';
 
 const App: React.FC = () => {
+    const [apiKey, setApiKey] = useState<string>('');
+    const [apiKeyConfirmed, setApiKeyConfirmed] = useState<boolean>(false);
+    
     const [step, setStep] = useState<Step>('CREATE_MONUMENT');
     const [monumentSource, setMonumentSource] = useState<'prompt' | 'upload'>('prompt');
     const [monumentPrompt, setMonumentPrompt] = useState<string>('A majestic crystal obelisk monument, futuristic, glowing');
@@ -68,11 +70,21 @@ const App: React.FC = () => {
     const [isGeneratingPrompt, setIsGeneratingPrompt] = useState<boolean>(false);
     const [isLinkCopied, setIsLinkCopied] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
+    
+    const getGenAI = useCallback(() => {
+        if (!apiKeyConfirmed || !apiKey) {
+            setApiKeyConfirmed(false);
+            throw new Error("API Key not provided. Please enter your API key to continue.");
+        }
+        return new GoogleGenAI({ apiKey });
+    }, [apiKey, apiKeyConfirmed]);
 
     const handleError = (err: unknown) => {
         const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-        if (errorMessage.includes("API key not valid") || errorMessage.includes("Requested entity was not found")) {
-            setError("Your API key appears to be invalid or missing. Please ensure it's configured correctly in your environment.");
+        // If the error is about an invalid key, force the user back to the selection screen.
+        if (errorMessage.includes("API key not valid") || errorMessage.includes("API key is invalid") || errorMessage.includes("permission denied")) {
+            setError("Your API key appears to be invalid. Please enter a valid key to continue.");
+            setApiKeyConfirmed(false);
         } else if (errorMessage.includes("quota")){
             setError("You've exceeded your API quota. Please check your billing details or use a different key.");
         } else {
@@ -80,6 +92,15 @@ const App: React.FC = () => {
         }
         console.error(err);
     }
+
+    const handleApiKeySubmit = () => {
+        if (apiKey.trim()) {
+            setApiKeyConfirmed(true);
+            setError(null);
+        } else {
+            setError("Please enter a valid API key.");
+        }
+    };
 
     const changeMonumentSource = (source: 'prompt' | 'upload') => {
         setGeneratedMonument(null); // Reset on tab switch
@@ -113,7 +134,7 @@ const App: React.FC = () => {
         setLoadingMessage('Generating your monument...');
         setError(null);
         try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const ai = getGenAI();
 
             const fullPrompt = `Create a photorealistic 3D render of a monument based on the following description: "${monumentPrompt}".
 
@@ -142,7 +163,7 @@ Key requirements:
         } finally {
             setIsLoading(false);
         }
-    }, [monumentPrompt]);
+    }, [monumentPrompt, getGenAI]);
 
     const handleGenerateMonumentFromImage = useCallback(async () => {
         if (!monumentFile) {
@@ -159,7 +180,7 @@ Key requirements:
         setError(null);
 
         try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const ai = getGenAI();
             const imagePart = await fileToGenerativePart(monumentFile);
             
             const fullPrompt = `Task: Create a photorealistic 3D render of a monument based on the main subject of the provided image.
@@ -195,14 +216,15 @@ Instructions:
         } finally {
             setIsLoading(false);
         }
-    }, [monumentFile, monumentPrompt]);
+    }, [monumentFile, monumentPrompt, getGenAI]);
 
-    const handleSceneUpload = async (file: File) => {
+    const handleSceneUpload = useCallback(async (file: File) => {
         setSceneFile(file);
         setIsGeneratingPrompt(true);
         setEditPrompt('Generating scene description...');
+        setError(null);
         try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const ai = getGenAI();
             const imagePart = await fileToGenerativePart(file);
             const prompt = "Briefly describe this image for an AI photo editing prompt. Focus on the main environment. For example: 'a sandy beach at sunset' or 'a snowy mountain range'.";
             
@@ -216,12 +238,12 @@ Instructions:
 
         } catch (err) {
             console.error("Failed to generate scene description:", err);
-            setError("Could not generate a description for the scene. Please write one manually.");
+            handleError(err);
             setEditPrompt('Add the monument to the scene, making it look natural');
         } finally {
             setIsGeneratingPrompt(false);
         }
-    };
+    }, [getGenAI]);
 
     const handlePlaceMonument = useCallback(async () => {
         if (!generatedMonument) {
@@ -245,7 +267,7 @@ Instructions:
         setError(null);
         
         try {
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+            const ai = getGenAI();
             let sceneToUseFile: File;
 
             if (sceneSource === 'prompt') {
@@ -264,7 +286,6 @@ Instructions:
 
                 sceneToUseFile = dataURLtoFile(sceneImageUrl, 'scene.png');
             } else {
-                // sceneFile is guaranteed to be non-null by the initial checks
                 sceneToUseFile = sceneFile!;
             }
 
@@ -284,9 +305,9 @@ Instructions:
     *   **Scale & Perspective:** Adjust the monument's size and perspective to fit realistically within the scene. It should look like it belongs there, not like a sticker.
     *   **Lighting & Shadows:** The monument must be lit according to the scene's light sources. It must cast realistic shadows on the ground and surrounding objects that match the direction and softness of existing shadows in the scene.
     *   **Color & Style:** The monument's colors and textures should be integrated with the scene's color grading and atmosphere.
-5.  **Output:** The final image must preserve the original framing and aspect ratio of the scene without any cropping. The integration should be seamless.`;
+5.  **Output:** The final image must preserve the quality and dimensions of the original scene.`;
 
-            const finalResponse = await ai.models.generateContent({
+            const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash-image',
                 contents: {
                     parts: [
@@ -298,303 +319,282 @@ Instructions:
                 config: { responseModalities: [Modality.IMAGE] },
             });
 
-            const finalImageUrl = getImageUrlFromResponse(finalResponse);
+            const finalImageUrl = getImageUrlFromResponse(response);
 
             if (finalImageUrl) {
                 setFinalImage(finalImageUrl);
+                setStep('SHARE');
             } else {
-                throw new Error("Image editing failed.");
+                throw new Error("Failed to generate the final image.");
             }
+
         } catch (err) {
             handleError(err);
         } finally {
             setIsLoading(false);
         }
-    }, [generatedMonument, sceneFile, sceneSource, scenePrompt, editPrompt]);
+    }, [getGenAI, generatedMonument, sceneFile, sceneSource, scenePrompt, editPrompt]);
     
-    const reset = () => {
-        setStep('CREATE_MONUMENT');
-        setMonumentSource('prompt');
-        setMonumentPrompt('A majestic crystal obelisk monument, futuristic, glowing');
-        setMonumentFile(null);
-        setGeneratedMonument(null);
-        setSceneFile(null);
-        setSceneSource('upload');
-        setScenePrompt('A beautiful sunny park with green grass and trees, photorealistic.');
-        setEditPrompt('Add the monument to the center of the park, making it look natural');
-        setFinalImage(null);
-        setError(null);
-    };
-
-    const renderStep = () => {
-        switch (step) {
-            case 'CREATE_MONUMENT':
-                return (
-                    <div className="space-y-6">
-                        <h2 className="text-2xl font-bold text-center text-slate-200">Step 1: Create Your Monument</h2>
-                        {!generatedMonument && (
-                            <div className="flex justify-center bg-slate-800 p-1 rounded-lg max-w-sm mx-auto">
-                                <button onClick={() => changeMonumentSource('prompt')} className={`w-1/2 py-2 rounded-md transition-colors ${monumentSource === 'prompt' ? 'bg-cyan-500 text-white' : 'hover:bg-slate-700'}`}>From Prompt</button>
-                                <button onClick={() => changeMonumentSource('upload')} className={`w-1/2 py-2 rounded-md transition-colors ${monumentSource === 'upload' ? 'bg-cyan-500 text-white' : 'hover:bg-slate-700'}`}>Upload Image</button>
-                            </div>
-                        )}
-                        
-                        {monumentSource === 'prompt' && (
-                            generatedMonument ? (
-                                <div className="space-y-4 animate-fade-in">
-                                    <h3 className="font-semibold text-slate-400 text-center">Your Generated Monument</h3>
-                                    <img src={generatedMonument} alt="Generated Monument" className="rounded-lg w-full max-w-md mx-auto object-contain bg-slate-800" />
-                                    <textarea
-                                        value={monumentPrompt}
-                                        onChange={(e) => setMonumentPrompt(e.target.value)}
-                                        placeholder="e.g., A giant statue of a cat playing a banjo"
-                                        className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
-                                    />
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                        <button onClick={handleGenerateMonument} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
-                                            Re-generate
-                                        </button>
-                                        <button onClick={() => setStep('PLACE_IN_SCENE')} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
-                                            Looks Good, Continue
-                                        </button>
-                                    </div>
-                                    <div className="text-center pt-2">
-                                        <button onClick={() => { setGeneratedMonument(null); changeMonumentSource('prompt'); }} className="text-sm text-slate-400 hover:text-white transition">
-                                            Start Over
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="space-y-4">
-                                    <textarea
-                                        value={monumentPrompt}
-                                        onChange={(e) => setMonumentPrompt(e.target.value)}
-                                        placeholder="e.g., A giant statue of a cat playing a banjo"
-                                        className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
-                                    />
-                                    <button onClick={handleGenerateMonument} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
-                                        Generate Monument
-                                    </button>
-                                </div>
-                            )
-                        )}
-
-                        {monumentSource === 'upload' && (
-                             generatedMonument && monumentFile ? (
-                                <div className="space-y-4 animate-fade-in">
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
-                                        <div>
-                                            <h3 className="font-semibold text-slate-400 text-center mb-2">Original</h3>
-                                            <img src={URL.createObjectURL(monumentFile)} alt="Original Upload" className="rounded-lg w-full object-contain bg-slate-800 max-h-64" />
-                                        </div>
-                                        <div>
-                                            <h3 className="font-semibold text-slate-400 text-center mb-2">Generated Monument</h3>
-                                            <img src={generatedMonument} alt="Generated Monument" className="rounded-lg w-full object-contain bg-slate-800 max-h-64" />
-                                        </div>
-                                    </div>
-                                     <textarea
-                                        value={monumentPrompt}
-                                        onChange={(e) => setMonumentPrompt(e.target.value)}
-                                        placeholder="e.g., A giant marble statue"
-                                        className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
-                                    />
-                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                        <button onClick={handleGenerateMonumentFromImage} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
-                                            Re-generate
-                                        </button>
-                                        <button onClick={() => setStep('PLACE_IN_SCENE')} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
-                                            Looks Good, Continue
-                                        </button>
-                                    </div>
-                                    <div className="text-center pt-2">
-                                        <button onClick={() => { setGeneratedMonument(null); setMonumentFile(null); }} className="text-sm text-slate-400 hover:text-white transition">
-                                            Start Over with a new image
-                                        </button>
-                                    </div>
-                                </div>
-                            ) : (
-                                <div className="space-y-4">
-                                    <ImageUploader 
-                                        onImageUpload={setMonumentFile} 
-                                        label="Upload an image of an object or person" 
-                                        id="monument-upload" 
-                                    />
-                                    <textarea
-                                        value={monumentPrompt}
-                                        onChange={(e) => setMonumentPrompt(e.target.value)}
-                                        placeholder="e.g., A giant marble statue"
-                                        className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
-                                    />
-                                    <button 
-                                        disabled={!monumentFile} 
-                                        onClick={handleGenerateMonumentFromImage} 
-                                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg disabled:bg-slate-600 disabled:cursor-not-allowed"
-                                    >
-                                        Generate Monument from Image
-                                    </button>
-                                </div>
-                            )
-                        )}
+    // API Key entry screen
+    if (!apiKeyConfirmed) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-screen bg-slate-900 p-4">
+                <div className="w-full max-w-md bg-slate-800 p-8 rounded-2xl shadow-2xl border border-slate-700">
+                    <div className="flex items-center gap-3 mb-6">
+                        <svg className="w-8 h-8 text-cyan-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m2 21 8-8 1.5 1.5 8-8"/><path d="M7 3h14v14"/><path d="m22 2-2.5 2.5"/><path d="m19 5-2.5 2.5"/><path d="m16 8-2.5 2.5"/></svg>
+                        <h1 className="text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-500">Monument Mixer AI</h1>
                     </div>
-                );
-            case 'PLACE_IN_SCENE':
-                return (
-                    <div className="space-y-6">
-                        <h2 className="text-2xl font-bold text-center text-slate-200">Step 2: Place in Scene</h2>
-                        {finalImage ? (
-                            <div className="space-y-4 animate-fade-in">
-                                <h3 className="font-semibold text-slate-400 text-center">Your Final Image</h3>
-                                <img src={finalImage} alt="Final composition" className="rounded-lg w-full max-w-xl mx-auto object-contain bg-slate-800" />
-                                <textarea
-                                    value={editPrompt}
-                                    onChange={(e) => setEditPrompt(e.target.value)}
-                                    placeholder="e.g., Make it smaller and place it on the right"
-                                    className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
-                                />
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                                    <button onClick={handlePlaceMonument} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
-                                        Re-generate
-                                    </button>
-                                    <button onClick={() => setStep('SHARE')} className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg">
-                                        Looks Good, Continue
-                                    </button>
+                    <h2 className="text-lg font-semibold text-slate-200 mb-2">Enter Your API Key</h2>
+                    <p className="text-slate-400 text-sm mb-6">
+                        To use this application, you need a Google AI API key. Your key is only used for this session and is not stored.
+                    </p>
+                    <div className="flex flex-col gap-4">
+                        <input
+                            type="password"
+                            value={apiKey}
+                            onChange={(e) => setApiKey(e.target.value)}
+                            placeholder="Enter your Google AI API Key"
+                            className="w-full bg-slate-900 border border-slate-700 rounded-md py-2 px-4 text-slate-300 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
+                            onKeyDown={(e) => e.key === 'Enter' && handleApiKeySubmit()}
+                        />
+                        <button
+                            onClick={handleApiKeySubmit}
+                            className="w-full bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-2 px-4 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={!apiKey.trim()}
+                        >
+                            Continue
+                        </button>
+                    </div>
+                    {error && <p className="text-red-400 text-sm mt-4 text-center">{error}</p>}
+                </div>
+            </div>
+        );
+    }
+    
+    // Main Application
+    return (
+        <>
+            {isLoading && <Loader message={loadingMessage} />}
+            <Header />
+            <main className="container mx-auto p-4 sm:p-8">
+                {/* Step 1: Create Monument */}
+                {step === 'CREATE_MONUMENT' && (
+                    <section>
+                        <div className="text-center mb-8">
+                            <h2 className="text-3xl font-bold text-slate-100">Step 1: Create Your Monument</h2>
+                            <p className="text-slate-400 mt-2">Design a unique monument either from your imagination or an existing image.</p>
+                        </div>
+
+                        <div className="max-w-4xl mx-auto bg-slate-800 rounded-2xl p-6 sm:p-8 shadow-lg border border-slate-700">
+                            <div className="flex border-b border-slate-700 mb-6">
+                                <button onClick={() => changeMonumentSource('prompt')} className={`py-2 px-4 font-semibold transition-colors ${monumentSource === 'prompt' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-slate-400 hover:text-white'}`}>
+                                    From Prompt
+                                </button>
+                                <button onClick={() => changeMonumentSource('upload')} className={`py-2 px-4 font-semibold transition-colors ${monumentSource === 'upload' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-slate-400 hover:text-white'}`}>
+                                    From Image
+                                </button>
+                            </div>
+
+                            <div className="grid md:grid-cols-2 gap-8 items-start">
+                                <div>
+                                    {monumentSource === 'prompt' ? (
+                                        <div className="space-y-4">
+                                            <label htmlFor="monumentPrompt" className="block font-semibold text-slate-300">Describe your monument:</label>
+                                            <textarea
+                                                id="monumentPrompt"
+                                                value={monumentPrompt}
+                                                onChange={(e) => setMonumentPrompt(e.target.value)}
+                                                rows={4}
+                                                placeholder="e.g., A majestic crystal obelisk monument, futuristic, glowing"
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-md py-2 px-4 text-slate-300 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
+                                            />
+                                            <button onClick={handleGenerateMonument} className="w-full bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-2.5 px-4 rounded-md transition-colors disabled:opacity-50" disabled={isLoading || !monumentPrompt}>
+                                                Generate Monument
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            <ImageUploader id="monument-uploader" label="Upload an image" onImageUpload={setMonumentFile} />
+                                             <label htmlFor="monumentStylePrompt" className="block font-semibold text-slate-300 pt-2">Describe the monument's style:</label>
+                                             <textarea
+                                                id="monumentStylePrompt"
+                                                value={monumentPrompt}
+                                                onChange={(e) => setMonumentPrompt(e.target.value)}
+                                                rows={3}
+                                                placeholder="e.g., A grand, majestic monument made of polished bronze."
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-md py-2 px-4 text-slate-300 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
+                                            />
+                                            <button onClick={handleGenerateMonumentFromImage} className="w-full bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-2.5 px-4 rounded-md transition-colors disabled:opacity-50" disabled={isLoading || !monumentFile || !monumentPrompt}>
+                                                Generate from Image
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
-                                <div className="text-center pt-2">
-                                    <button onClick={() => setFinalImage(null)} className="text-sm text-slate-400 hover:text-white transition">
-                                        Change Scene
-                                    </button>
+                                
+                                <div className="flex flex-col items-center justify-center bg-slate-900/50 rounded-lg p-4 h-full min-h-[200px]">
+                                    {generatedMonument ? (
+                                        <img src={generatedMonument} alt="Generated Monument" className="max-w-full max-h-80 rounded-md object-contain" />
+                                    ) : (
+                                        <div className="text-center text-slate-500">
+                                            <svg className="w-16 h-16 mx-auto" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="m2 21 8-8 1.5 1.5 8-8"/><path d="M7 3h14v14"/><path d="m22 2-2.5 2.5"/><path d="m19 5-2.5 2.5"/><path d="m16 8-2.5 2.5"/></svg>
+                                            <p className="mt-2">Your monument will appear here.</p>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
-                        ) : (
-                            <>
-                                <div className="grid md:grid-cols-2 gap-6 items-start">
-                                   <div className="space-y-2">
-                                        <h3 className="font-semibold text-slate-400">Your Monument:</h3>
-                                        {generatedMonument && <img src={generatedMonument} alt="Monument" className="rounded-lg w-full object-contain max-h-64 bg-slate-800" />}
-                                   </div>
-                                   <div className="space-y-4">
-                                        <div className="flex justify-center bg-slate-800 p-1 rounded-lg">
-                                            <button onClick={() => changeSceneSource('upload')} className={`w-1/2 py-2 rounded-md transition-colors ${sceneSource === 'upload' ? 'bg-cyan-500 text-white' : 'hover:bg-slate-700'}`}>Upload Scene</button>
-                                            <button onClick={() => changeSceneSource('prompt')} className={`w-1/2 py-2 rounded-md transition-colors ${sceneSource === 'prompt' ? 'bg-cyan-500 text-white' : 'hover:bg-slate-700'}`}>From Prompt</button>
+                            
+                            {error && <p className="text-red-400 text-sm mt-4 text-center">{error}</p>}
+                            
+                            <div className="mt-8 text-center">
+                                <button
+                                    onClick={() => setStep('PLACE_IN_SCENE')}
+                                    disabled={!generatedMonument || isLoading}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg"
+                                >
+                                    Next: Place in Scene &rarr;
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+                )}
+                {/* Step 2: Place in Scene */}
+                {step === 'PLACE_IN_SCENE' && (
+                    <section>
+                        <div className="text-center mb-8">
+                            <h2 className="text-3xl font-bold text-slate-100">Step 2: Place in a Scene</h2>
+                            <p className="text-slate-400 mt-2">Put your monument into a new environment, either from a prompt or an uploaded image.</p>
+                        </div>
+
+                        <div className="grid lg:grid-cols-3 gap-8 items-start">
+                            <div className="lg:col-span-1 space-y-4">
+                                <h3 className="text-lg font-semibold text-slate-200">Your Monument</h3>
+                                <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                                    <img src={generatedMonument!} alt="Your Monument" className="w-full rounded-md object-contain" />
+                                </div>
+                                 <button onClick={() => setStep('CREATE_MONUMENT')} className="text-sm text-cyan-400 hover:text-cyan-300 transition-colors">&larr; Back to Monument Creation</button>
+                            </div>
+
+                            <div className="lg:col-span-2 bg-slate-800 rounded-2xl p-6 sm:p-8 shadow-lg border border-slate-700">
+                                 <div className="flex border-b border-slate-700 mb-6">
+                                    <button onClick={() => changeSceneSource('upload')} className={`py-2 px-4 font-semibold transition-colors ${sceneSource === 'upload' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-slate-400 hover:text-white'}`}>
+                                        Upload Scene
+                                    </button>
+                                    <button onClick={() => changeSceneSource('prompt')} className={`py-2 px-4 font-semibold transition-colors ${sceneSource === 'prompt' ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-slate-400 hover:text-white'}`}>
+                                        Generate Scene
+                                    </button>
+                                </div>
+
+                                <div className="space-y-6">
+                                    {sceneSource === 'upload' ? (
+                                        <div>
+                                            <label className="block font-semibold text-slate-300 mb-2">Upload your scene:</label>
+                                            <ImageUploader id="scene-uploader" label="Upload a background image" onImageUpload={handleSceneUpload} />
                                         </div>
-                                        
-                                        {sceneSource === 'upload' ? (
-                                            <ImageUploader onImageUpload={handleSceneUpload} label="Upload a scene image" id="scene-upload"/>
-                                        ) : (
+                                    ) : (
+                                        <div>
+                                            <label htmlFor="scenePrompt" className="block font-semibold text-slate-300 mb-2">Describe the scene to generate:</label>
                                             <textarea
+                                                id="scenePrompt"
                                                 value={scenePrompt}
                                                 onChange={(e) => setScenePrompt(e.target.value)}
-                                                placeholder="e.g., A futuristic city skyline at night"
-                                                className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
+                                                rows={3}
+                                                placeholder="e.g., A beautiful sunny park with green grass and trees, photorealistic."
+                                                className="w-full bg-slate-900 border border-slate-700 rounded-md py-2 px-4 text-slate-300 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
                                             />
-                                        )}
-                                        
-                                        <textarea
+                                        </div>
+                                    )}
+
+                                    <div>
+                                        <label htmlFor="editPrompt" className="block font-semibold text-slate-300 mb-2">Placement Instructions:</label>
+                                         <textarea
+                                            id="editPrompt"
                                             value={editPrompt}
                                             onChange={(e) => setEditPrompt(e.target.value)}
-                                            placeholder="Instructions for placing the monument..."
-                                            className="w-full h-24 bg-slate-800 border border-slate-700 rounded-md p-3 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition disabled:opacity-50"
-                                            disabled={sceneSource === 'upload' && isGeneratingPrompt}
+                                            rows={3}
+                                            placeholder="e.g., Place the monument in the center of the scene, making it look natural"
+                                            className="w-full bg-slate-900 border border-slate-700 rounded-md py-2 px-4 text-slate-300 focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
+                                            disabled={isGeneratingPrompt}
                                         />
-                                   </div>
+                                    </div>
+                                     {error && <p className="text-red-400 text-sm mt-2 text-center">{error}</p>}
+
+                                     <button
+                                        onClick={handlePlaceMonument}
+                                        disabled={isLoading || isGeneratingPrompt || (sceneSource === 'upload' && !sceneFile) || (sceneSource === 'prompt' && !scenePrompt) || !editPrompt}
+                                        className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-8 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg"
+                                    >
+                                        Place Monument & Create Final Image
+                                    </button>
                                 </div>
-                                <button 
-                                    disabled={!editPrompt || (sceneSource === 'upload' && (!sceneFile || isGeneratingPrompt)) || (sceneSource === 'prompt' && !scenePrompt)} 
-                                    onClick={handlePlaceMonument} 
-                                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-md transition-colors text-lg disabled:bg-slate-600 disabled:cursor-not-allowed"
-                                >
-                                     {isGeneratingPrompt ? 'Analyzing Scene...' : 'Create Final Image'}
-                                </button>
-                            </>
-                        )}
-                    </div>
-                );
-            case 'SHARE':
-                const appUrl = window.location.href;
-                const shareText = "Check out the monument I created with Monument Mixer AI! #MonumentMixer #AIArt";
-
-                const handleDownload = () => {
-                    if (!finalImage) return;
-                    const link = document.createElement('a');
-                    link.href = finalImage;
-                    link.download = 'monument-masterpiece.png';
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                };
-
-                const handleCopyLink = () => {
-                    if (!finalImage) return;
-                    navigator.clipboard.writeText(finalImage).then(() => {
-                        setIsLinkCopied(true);
-                        setTimeout(() => setIsLinkCopied(false), 2500);
-                    }).catch(err => {
-                        console.error("Failed to copy image link", err);
-                        alert("Could not copy image link. Please try downloading instead.");
-                    });
-                };
-
-                const handleInstagramShare = () => {
-                    alert("To share on Instagram, please download the image first, then upload it from your device.");
-                };
-
-                return (
-                    <div className="space-y-6">
-                        <h2 className="text-2xl font-bold text-center text-slate-200">Your Masterpiece is Ready!</h2>
-                        {finalImage && <img src={finalImage} alt="Final creation" className="rounded-lg w-full max-w-2xl mx-auto shadow-2xl shadow-cyan-500/10" />}
-                        
-                        <div className="border-t border-slate-700 pt-6 space-y-4">
-                            <h3 className="text-lg font-semibold text-center text-slate-300">Share Your Creation</h3>
-                            <div className="flex flex-wrap justify-center gap-3">
-                                <a href={`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(appUrl)}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
-                                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"></path></svg>
-                                    <span>Twitter</span>
-                                </a>
-                                <a href={`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(appUrl)}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
-                                     <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M14 13.5h2.5l1-4H14v-2c0-1.03 0-2 2-2h1.5V2.14c-.326-.043-1.557-.14-2.857-.14C11.928 2 10 3.657 10 6.7v2.8H7v4h3V22h4z"></path></svg>
-                                    <span>Facebook</span>
-                                </a>
-                                 <a href={`https://www.reddit.com/submit?url=${encodeURIComponent(appUrl)}&title=${encodeURIComponent("My AI Creation from Monument Mixer")}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 bg-orange-600 hover:bg-orange-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
-                                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M22.5,11.85a1.2,1.2,0,0,0-1.12-1,1.17,1.17,0,0,0-.3.05,6.3,6.3,0,0,0-5-3.21,1.19,1.19,0,0,0-1,.08,1.2,1.2,0,0,0-.73,1.06v.2a12.89,12.89,0,0,0-4.64,0v-.2a1.2,1.2,0,0,0-.73-1.06,1.18,1.18,0,0,0-1-.08,6.3,6.3,0,0,0-5,3.21,1.19,1.19,0,0,0-.3-.05,1.2,1.2,0,0,0-1.12,1,1.18,1.18,0,0,0,.6,1,10.19,10.19,0,0,0,0,4.68,1.18,1.18,0,0,0-.6,1,1.2,1.2,0,0,0,1.12,1,1.17,1.17,0,0,0,.3-.05,6.3,6.3,0,0,0,5,3.21,1.19,1.19,0,0,0,1-.08,1.2,1.2,0,0,0,.73-1.06v-.2a12.89,12.89,0,0,0,4.64,0v.2a1.2,1.2,0,0,0,.73,1.06,1.18,1.18,0,0,0,1,.08,6.3,6.3,0,0,0,5-3.21,1.19,1.19,0,0,0,.3.05,1.2,1.2,0,0,0,1.12-1,1.18,1.18,0,0,0-.6-1,10.19,10.19,0,0,0,0-4.68A1.18,1.18,0,0,0,22.5,11.85ZM8.73,15.1a1.68,1.68,0,0,1-2.13,0,1.19,1.19,0,0,1,0-1.72,1.68,1.68,0,0,1,2.13,0,1.19,1.19,0,0,1,0,1.72Zm6.53,0a1.68,1.68,0,0,1-2.13,0,1.19,1.19,0,0,1,0-1.72,1.68,1.68,0,0,1,2.13,0,1.19,1.19,0,0,1,0,1.72Zm1-5.99a3,3,0,0,1-4.83,1.08,1.2,1.2,0,0,1-1.33,0A3,3,0,0,1,7,9.11a1.2,1.2,0,0,1,2.06-.71,1.22,1.22,0,0,1,.29.89,1.53,1.53,0,0,0,3.06,0,1.22,1.22,0,0,1,.29-.89A1.2,1.2,0,0,1,17,9.11Z"/></svg>
-                                    <span>Reddit</span>
-                                </a>
-                                <button onClick={handleInstagramShare} className="inline-flex items-center gap-2 bg-pink-600 hover:bg-pink-700 text-white font-bold py-2 px-4 rounded-md transition-colors">
-                                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.85s-.011 3.584-.069 4.85c-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07s-3.584-.012-4.85-.07c-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.85s.012-3.584.07-4.85c.149-3.227 1.664-4.771 4.919-4.919C8.416 2.175 8.796 2.163 12 2.163m0-1.623C8.74 0 8.333.011 7.053.072 2.695.272.273 2.69.073 7.052.012 8.333 0 8.74 0 12s.012 3.667.072 4.947c.2 4.358 2.618 6.78 6.98 6.98C8.333 23.988 8.74 24 12 24s3.667-.012 4.947-.072c4.358-.2 6.78-2.618 6.98-6.98C23.988 15.667 24 15.26 24 12s-.012-3.667-.072-4.947c-.2-4.358-2.618-6.78-6.98-6.98C15.667.012 15.26 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.88 1.44 1.44 0 000-2.88z"></path></svg>
-                                    <span>Instagram</span>
-                                </button>
                             </div>
                         </div>
+                    </section>
+                )}
+                {/* Step 3: Share */}
+                {step === 'SHARE' && (
+                    <section>
+                        <div className="text-center mb-8">
+                            <h2 className="text-3xl font-bold text-slate-100">Your Creation is Ready!</h2>
+                            <p className="text-slate-400 mt-2">Download your masterpiece, share it with the world, and start a new creation.</p>
+                        </div>
 
-                        <div className="flex justify-center gap-4 pt-4">
-                            <button onClick={handleDownload} className="bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-md transition-colors text-lg">
-                                Download
-                            </button>
-                             <button onClick={handleCopyLink} className="bg-slate-700 hover:bg-slate-600 text-white font-bold py-3 px-6 rounded-md transition-colors text-lg">
-                                {isLinkCopied ? 'Copied!' : 'Copy Image Link'}
-                            </button>
+                        <div className="max-w-4xl mx-auto">
+                            {finalImage && (
+                                <div className="bg-slate-800 rounded-2xl p-4 sm:p-6 shadow-lg border border-slate-700">
+                                    <img src={finalImage} alt="Final generated image" className="w-full rounded-lg" />
+                                </div>
+                            )}
+
+                            <div className="mt-6 flex flex-wrap justify-center gap-4">
+                                <a
+                                    href={finalImage!}
+                                    download="monument-creation.png"
+                                    className="bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-2 px-6 rounded-md transition-colors inline-flex items-center gap-2"
+                                >
+                                    <svg className="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M10.75 2.75a.75.75 0 0 0-1.5 0v8.614L6.295 8.235a.75.75 0 1 0-1.09 1.03l4.25 4.5a.75.75 0 0 0 1.09 0l4.25-4.5a.75.75 0 0 0-1.09-1.03l-2.955 3.129V2.75Z" /><path d="M3.5 12.75a.75.75 0 0 0-1.5 0v2.5A2.75 2.75 0 0 0 4.75 18h10.5A2.75 2.75 0 0 0 18 15.25v-2.5a.75.75 0 0 0-1.5 0v2.5c0 .69-.56 1.25-1.25 1.25H4.75c-.69 0-1.25-.56-1.25-1.25v-2.5Z" /></svg>
+                                    Download
+                                </a>
+                                <button
+                                    onClick={() => {
+                                        navigator.clipboard.writeText(window.location.href);
+                                        setIsLinkCopied(true);
+                                        setTimeout(() => setIsLinkCopied(false), 2000);
+                                    }}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-md transition-colors inline-flex items-center gap-2"
+                                >
+                                    {isLinkCopied ? (
+                                        <>
+                                        <svg className="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.052-.143Z" clipRule="evenodd" /></svg>
+                                        Copied!
+                                        </>
+                                    ) : (
+                                        <>
+                                        <svg className="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path d="M7.217 10.877a9.25 9.25 0 0 0-2.315-.316.75.75 0 0 0-.742.668 12.25 12.25 0 0 0-.44 2.223.75.75 0 0 0 .741.832 9.223 9.223 0 0 0 2.316.316.75.75 0 0 0 .742-.668 12.21 12.21 0 0 0 .44-2.223.75.75 0 0 0-.741-.832ZM12.783 9.123a.75.75 0 0 0-.742.668 12.21 12.21 0 0 0 .44 2.223.75.75 0 0 0 .741.832 9.223 9.223 0 0 0 2.316.316.75.75 0 0 0 .742-.668 12.25 12.25 0 0 0-.44-2.223.75.75 0 0 0-.741-.832 9.25 9.25 0 0 0-2.315-.316Z" /><path fillRule="evenodd" d="M10 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM8.283 6.033a.75.75 0 0 0-1.066-1.066L3.75 8.434a.75.75 0 0 0 0 1.06l3.467 3.467a.75.75 0 0 0 1.066-1.066L5.88 9.5h8.24a.75.75 0 0 0 0-1.5H5.88l2.403-2.404Z" clipRule="evenodd" /></svg>
+                                        Share
+                                        </>
+                                    )}
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setStep('CREATE_MONUMENT');
+                                        setGeneratedMonument(null);
+                                        setFinalImage(null);
+                                        setSceneFile(null);
+                                        setError(null);
+                                    }}
+                                    className="bg-slate-600 hover:bg-slate-700 text-white font-bold py-2 px-6 rounded-md transition-colors inline-flex items-center gap-2"
+                                >
+                                    <svg className="w-5 h-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201-4.42 5.5 5.5 0 0 1 10.89 2.01a.75.75 0 0 1-1.445.385a4 4 0 0 0-8.316-1.44a4 4 0 0 0 1.51 6.887a.75.75 0 0 1 .53 1.282A5.503 5.503 0 0 1 15.312 11.424ZM4.688 8.576a5.5 5.5 0 0 1 9.201 4.42a5.5 5.5 0 0 1-10.89-2.01a.75.75 0 0 1 1.445-.385a4 4 0 0 0 8.316 1.44a4 4 0 0 0-1.51-6.887a.75.75 0 0 1-.53-1.282A5.503 5.503 0 0 1 4.688 8.576Z" clipRule="evenodd" /></svg>
+                                    Start Over
+                                </button>
+                            </div>
+
+                            <CommentSection />
                         </div>
-                        <div className="text-center pt-2">
-                            <button onClick={reset} className="text-sm text-slate-400 hover:text-white transition">
-                                ✨ Create Another Masterpiece
-                            </button>
-                        </div>
-                        <CommentSection />
-                    </div>
-                );
-        }
-    };
-    
-    return (
-        <div className="min-h-screen bg-slate-900 text-white font-sans flex flex-col">
-            <Header />
-            <main className="flex-grow container mx-auto p-4 sm:p-8 flex items-center justify-center">
-                <div className="w-full max-w-2xl bg-slate-800/50 rounded-2xl shadow-2xl shadow-cyan-500/10 p-6 sm:p-8 border border-slate-700">
-                    {isLoading && <Loader message={loadingMessage} />}
-                    {error && <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-md mb-4">{error}</div>}
-                    {renderStep()}
-                </div>
+                    </section>
+                )}
             </main>
-        </div>
+        </>
     );
 };
 
