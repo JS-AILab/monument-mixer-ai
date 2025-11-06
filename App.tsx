@@ -1,118 +1,124 @@
 import React, { useState, useCallback } from 'react';
+import { Header } from './components/Header';
+import { PromptInput } from './components/PromptInput';
 import { ImageUploader } from './components/ImageUploader';
-import { Spinner } from './components/Spinner';
-import { generateImageWithPrompt } from './services/geminiService';
-import { fileToImagePayload } from './utils/fileUtils';
-import { ImageFile, ImagePayload } from './types';
+import { ImageDisplay } from './components/ImageDisplay';
+import { generateMonument } from './services/geminiService';
 
-function App() {
+interface UploadedImage {
+  base64: string;
+  mimeType: string;
+  name: string;
+}
+
+const App: React.FC = () => {
   const [prompt, setPrompt] = useState<string>('');
-  const [imageFile, setImageFile] = useState<ImageFile | null>(null);
-  const [generatedImageUrl, setGeneratedImageUrl] = useState<string | null>(null);
+  const [uploadedImage, setUploadedImage] = useState<UploadedImage | null>(null);
+  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleImageSelect = (file: File | null) => {
-    if (imageFile) {
-      URL.revokeObjectURL(imageFile.previewUrl);
-    }
-
-    if (file) {
-      setImageFile({
-        file,
-        previewUrl: URL.createObjectURL(file),
-      });
-    } else {
-      setImageFile(null);
-    }
-    setGeneratedImageUrl(null); // Clear previous result when image changes
+  const fileToBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = () => resolve((reader.result as string).split(',')[1]);
+      reader.onerror = (error) => reject(error);
+    });
   };
 
-  const handleSubmit = useCallback(async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!prompt || !imageFile) {
-      setError('Please provide a prompt and an image.');
+  const handleImageUpload = async (file: File) => {
+    try {
+      setError(null);
+      const base64 = await fileToBase64(file);
+      setUploadedImage({ base64, mimeType: file.type, name: file.name });
+    } catch (err) {
+      console.error('Error converting file to base64:', err);
+      setError('Failed to process the image. Please try another one.');
+    }
+  };
+  
+  const handleGenerate = useCallback(async () => {
+    if (!prompt && !uploadedImage) {
+      setError('Please provide a prompt or upload an image.');
       return;
     }
 
     setIsLoading(true);
     setError(null);
-    setGeneratedImageUrl(null);
+    setGeneratedImage(null);
 
     try {
-      const imagePayload: ImagePayload = await fileToImagePayload(imageFile.file);
-      const resultUrl = await generateImageWithPrompt(prompt, imagePayload);
-      setGeneratedImageUrl(resultUrl);
-    } catch (e) {
-      if (e instanceof Error) {
-        setError(e.message);
+      const imagePart = uploadedImage ? { data: uploadedImage.base64, mimeType: uploadedImage.mimeType } : null;
+      const resultBase64 = await generateMonument(prompt, imagePart);
+      if (resultBase64) {
+        setGeneratedImage(`data:image/png;base64,${resultBase64}`);
       } else {
-        setError('An unknown error occurred.');
+        throw new Error('The API did not return an image.');
       }
+    } catch (err: any) {
+      console.error('Error generating monument:', err);
+      setError(err.message || 'An unexpected error occurred. Please try again.');
     } finally {
       setIsLoading(false);
     }
-  }, [prompt, imageFile]);
+  }, [prompt, uploadedImage]);
+
+  const canGenerate = (prompt.trim() !== '' || uploadedImage !== null) && !isLoading;
 
   return (
-    <div className="bg-gray-900 text-white min-h-screen font-sans">
-      <div className="container mx-auto px-4 py-8 max-w-2xl">
-        <header className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-purple-400">AI Image Editor</h1>
-          <p className="text-gray-400 mt-2">Upload an image and tell the AI how to change it.</p>
-        </header>
-
-        <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
-            <label htmlFor="prompt" className="block text-sm font-medium text-gray-300 mb-2">
-              Your prompt
-            </label>
-            <textarea
-              id="prompt"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g., 'add a cat wearing a party hat'"
-              className="w-full h-24 p-3 bg-gray-800 border border-gray-700 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition"
-              rows={3}
+    <div className="min-h-screen bg-gray-900 text-gray-100 flex flex-col font-sans">
+      <Header />
+      <main className="flex-grow container mx-auto px-4 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12">
+          {/* Input Section */}
+          <div className="flex flex-col space-y-6 bg-gray-800 p-6 rounded-xl shadow-lg">
+            <h2 className="text-2xl font-bold text-cyan-400">1. Describe Your Vision</h2>
+            <PromptInput
+              prompt={prompt}
+              setPrompt={setPrompt}
+              onSubmit={handleGenerate}
+              disabled={isLoading}
             />
-          </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              Upload image
-            </label>
-            <ImageUploader 
-              onImageSelect={handleImageSelect} 
-              imagePreviewUrl={imageFile?.previewUrl || null} 
-            />
-          </div>
-          
-          <button
-            type="submit"
-            disabled={isLoading || !prompt || !imageFile}
-            className="w-full flex justify-center items-center gap-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-4 rounded-lg transition-colors"
-          >
-            {isLoading ? <><Spinner /> Generating...</> : 'Generate Image'}
-          </button>
-        </form>
-
-        {error && (
-          <div className="mt-6 p-4 bg-red-900/50 border border-red-700 text-red-300 rounded-lg">
-            <p><strong>Error:</strong> {error}</p>
-          </div>
-        )}
-
-        {generatedImageUrl && (
-          <div className="mt-8">
-            <h2 className="text-2xl font-semibold text-center mb-4">Result</h2>
-            <div className="bg-gray-800 rounded-lg overflow-hidden border border-gray-700">
-              <img src={generatedImageUrl} alt="Generated" className="w-full h-auto object-contain" />
+            <div className="relative flex items-center">
+              <span className="flex-shrink text-gray-400 px-4">OR</span>
+              <div className="flex-grow border-t border-gray-600"></div>
             </div>
+            <ImageUploader
+              onImageUpload={handleImageUpload}
+              uploadedImage={uploadedImage}
+              setUploadedImage={setUploadedImage}
+              disabled={isLoading}
+            />
+             <button
+              onClick={handleGenerate}
+              disabled={!canGenerate}
+              className={`w-full py-3 px-4 rounded-lg font-semibold text-lg transition-all duration-300 ease-in-out
+                ${canGenerate
+                  ? 'bg-cyan-500 hover:bg-cyan-400 text-white shadow-md hover:shadow-lg transform hover:-translate-y-0.5'
+                  : 'bg-gray-600 cursor-not-allowed text-gray-400'
+                }`}
+            >
+              {isLoading ? 'Creating...' : 'Generate Monument'}
+            </button>
           </div>
-        )}
-      </div>
+
+          {/* Output Section */}
+          <div className="flex flex-col bg-gray-800 p-6 rounded-xl shadow-lg">
+            <h2 className="text-2xl font-bold text-cyan-400 mb-6">2. Behold Your Creation</h2>
+            <ImageDisplay
+              isLoading={isLoading}
+              generatedImage={generatedImage}
+              error={error}
+            />
+          </div>
+        </div>
+      </main>
+      <footer className="text-center p-4 text-gray-500 text-sm">
+        <p>Powered by Google Gemini. Designed by a World-Class Frontend Engineer.</p>
+      </footer>
     </div>
   );
-}
+};
 
 export default App;

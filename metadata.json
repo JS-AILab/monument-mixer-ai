@@ -1,5 +1,5 @@
 {
   "name": "AI Monument Generator",
-  "description": "Create stunning images of monuments from text prompts or by uploading a reference image. This app uses Gemini to bring your architectural visions to life.",
+  "description": "Create stunning images of monuments from a text prompt or an uploaded image. This application uses Google's Gemini API to generate unique and artistic representations of monuments based on user input.",
   "requestFramePermissions": []
 }
